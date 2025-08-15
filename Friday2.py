@@ -39,6 +39,7 @@ def effective_area_from_sensitivity(E_pts, E2Phi_pts, *,
     return E_GeV, Aeff_m2
 
 def log_interp(x, xp, fp):
+    """Log-log linear interpolation with safe handling for nonpositive values (returns 0)."""
     xp = np.asarray(xp); fp = np.asarray(fp)
     mask = (xp > 0) & (fp > 0)
     xp = xp[mask]; fp = fp[mask]
@@ -54,14 +55,14 @@ def log_interp(x, xp, fp):
     return y
 
 def _trim_trailing_zeros(E, Y):
+    """Trim array to last strictly-positive point (inclusive)."""
     pos = np.where(Y > 0)[0]
     if pos.size == 0:
         return E[:0], Y[:0]
     last = pos[-1]
     return E[:last+1], Y[:last+1]
 
-def make_radio_plot(icecube_csv_path="friday.csv",
-                    out_png="friday.png"):
+def make_plot(icecube_csv_path="friday.csv", out_png="friday.png"):
     # =========================
     # Radio (RNO-G + Gen2 split; GRAND -> tau only)
     # =========================
@@ -95,9 +96,15 @@ def make_radio_plot(icecube_csv_path="friday.csv",
     A_gen2_on = log_interp(E_grid, E_gen2_GeV,  Aeff_gen2)
     A_grand_on= log_interp(E_grid, E_grand_GeV, Aeff_grand)
 
-    # Fractions csv
+    # Fractions CSV with fallbacks
     if not os.path.exists(icecube_csv_path):
-        raise FileNotFoundError(f"Scaling CSV not found: {icecube_csv_path}")
+        for alt in ["/mnt/data/friday.csv", "/mnt/data/radioscaling.csv", "/mnt/data/icecube.csv", "/mnt/data/energy_flavor_fractions.csv"]:
+            if os.path.exists(alt):
+                icecube_csv_path = alt
+                break
+        else:
+            raise FileNotFoundError("Scaling CSV not found.")
+
     df_frac = pd.read_csv(icecube_csv_path)
     req = {"Energy (GeV)", "electron fraction", "muon fraction", "taon fraction"}
     if not req.issubset(df_frac.columns):
@@ -131,7 +138,6 @@ def make_radio_plot(icecube_csv_path="friday.csv",
     # =========================
     # Additional experiments
     # =========================
-
     # POEMMA
     log10E_poemma = np.array([7, 7.2, 7.6, 8.0, 8.5, 9.0, 9.5, 10.0, 10.5])
     E_poemma_GeV  = 10**log10E_poemma
@@ -143,7 +149,7 @@ def make_radio_plot(icecube_csv_path="friday.csv",
         E_poemma_GeV, E2Phi_poemma, E_units="GeV", T_years=T_poemma, mu90=mu90_poemma, DeltaOmega=Omega_poemma
     )
 
-    # Trinity
+    # Trinity (tau-like)
     E_trinity_GeV = [1e5, 4e5, 1e6, 4e6, 1e7, 7e7, 4e8, 3e9, 1e10, 4e10]
     E2Phi_trinity = [2e-7, 3e-8, 1e-8, 2e-9, 1e-9, 5e-10, 7e-10, 3e-9, 8e-9, 4e-8]
     T_trinity     = 3.0
@@ -177,15 +183,20 @@ def make_radio_plot(icecube_csv_path="friday.csv",
         E_retn_eV, E2Phi_retn_lo, E_units="eV", T_years=T_retn, mu90=mu90_retn, DeltaOmega=Omega_retn
     )
 
-    # TAMBO (aperture to Aeff)
-    tambo_E_GeV = np.array([1e5, 1e6, 2e6, 4e6, 5e6, 6e6, 7e6, 8e6, 1e7, 3e7, 1e8, 4e8, 1e9], dtype=float)
-    tambo_tau_ap_m2sr = np.array([1, 50, 100, 500, 600, 3000, 4000, 3000, 2000, 6000, 20000, 40000, 50000], dtype=float)
-    tambo_all_ap_m2sr = np.array([1, 50, 100, 500, 700, 800, 1000, 1200, 2000, 6000, 20000, 40000, 50000], dtype=float)
+    # TAMBO: densify points by log-log interpolation
+    tambo_E_GeV_base = np.array([1e5, 1e6, 2e6, 4e6, 5e6, 6e6, 7e6, 8e6, 1e7, 3e7, 1e8, 4e8, 1e9], dtype=float)
+    tambo_tau_ap_m2sr_base = np.array([1, 50, 100, 500, 600, 3000, 4000, 3000, 2000, 6000, 20000, 40000, 50000], dtype=float)
+    tambo_all_ap_m2sr_base = np.array([1, 50, 100, 500, 700, 800, 1000, 1200, 2000, 6000, 20000, 40000, 50000], dtype=float)
     omega_tambo = 2.0
-    tambo_tau_Aeff_m2 = tambo_tau_ap_m2sr / omega_tambo
-    tambo_all_Aeff_m2 = tambo_all_ap_m2sr / omega_tambo
+    tambo_tau_Aeff_base = tambo_tau_ap_m2sr_base / omega_tambo
+    tambo_all_Aeff_base = tambo_all_ap_m2sr_base / omega_tambo
+    # Dense energy sampling (more points)
+    tambo_E_GeV = np.logspace(np.log10(tambo_E_GeV_base.min()), np.log10(tambo_E_GeV_base.max()), 40)
+    tambo_tau_Aeff_m2 = log_interp(tambo_E_GeV, tambo_E_GeV_base, tambo_tau_Aeff_base)
+    tambo_all_Aeff_m2 = log_interp(tambo_E_GeV, tambo_E_GeV_base, tambo_all_Aeff_base)
+    tambo_el_Aeff_m2  = np.abs(tambo_all_Aeff_m2 - tambo_tau_Aeff_m2)
 
-    # IceCube (given directly as Aeff for mu/e/tau)
+    # IceCube (Aeff for mu/e/tau)
     final_rows = np.array([
         [109.999,232.892,160.05588745185227,164.45467039632751,0.0,0.0,4,0,4],
         [232.892,493.079,338.8718850362184,489.2658968675564,0.0,0.0,2,0,2],
@@ -207,66 +218,76 @@ def make_radio_plot(icecube_csv_path="friday.csv",
     ice_el  = final_rows[:,4]
     ice_tau = final_rows[:,5]
 
-    # =========================
-    # Plot
-    # =========================
+    # ========= Plot =========
     fig, ax = plt.subplots(figsize=(11,7.5))
     ax.set_xscale('log'); ax.set_yscale('log')
 
-    # --- Color scheme ---
-    col_radio_e   = '#1f77b4'  # blue
-    col_radio_mu  = '#d55e00'  # muon base (orange-ish)
-    col_radio_tau = '#2ca03c'  # taon,green
-    col_poemma    = '#e41a1c'  # red
-    col_trinity = '#2ca01c'
-    col_retn_lo   = '#e91e63'   # pink edges  
-    col_retn_hi   = '#e91e63'   # same pink edges  
-    col_retn_fill = '#f8bbd0'   # light pink fill  
-    col_tambo_tau = '#4d4d4d'  # gray
-    col_tambo_all = '#7f7f7f'  # lighter gray
-    col_ic_mu     = '#d55e01'  #  shade of muon
-    col_ic_el     = '#1f77b2'  # match electron family
-    col_ic_tau    = '#2ca05b'  # match tau family
+    # Color scheme
+    ORANGE = '#ff7f0e'   # tau family
+    BLUE   = '#1f77b4'   # electron family
+    GREEN  = '#2ca02c'   # muon family
+    PINK_EDGE = '#e91e63'
+    PINK_FILL = '#f8bbd0'
 
-    # Radio (scatter + lines; trimmed e,μ)
+    # Markers for tau datasets
+    mk_radio_tau = 'o'
+    mk_trinity   = 'x'
+    mk_poemma    = 's'
+    mk_ic_tau    = 'D'
+
+    mk_radio_e   = 'o'
+    mk_ic_e      = 'D'
+    mk_tambo_e   = '^'
+
+    mk_radio_mu  = 'o'
+    mk_ic_mu     = 'D'
+
+    # Radio e (blue)
     if len(E_e_plot) > 0:
-        ax.plot(E_e_plot, A_e_plot, label="Radio Electron", color=col_radio_e)
-        ax.scatter(E_e_plot, A_e_plot, color=col_radio_e)
-        ax.scatter([E_e_plot[-1]], [A_e_plot[-1]], color=col_radio_e)
+        ax.plot(E_e_plot, A_e_plot, color=BLUE, label="Radio Electron o")
+        ax.scatter(E_e_plot, A_e_plot, color=BLUE, marker=mk_radio_e, s=18)
+        ax.scatter([E_e_plot[-1]], [A_e_plot[-1]], color=BLUE, marker=mk_radio_e, s=24)
+    # Radio mu (green)
     if len(E_m_plot) > 0:
-        ax.plot(E_m_plot, A_m_plot, label="Radio Muon", color=col_radio_mu)
-        ax.scatter(E_m_plot, A_m_plot, color=col_radio_mu)
-        ax.scatter([E_m_plot[-1]], [A_m_plot[-1]], color=col_radio_mu)
-    ax.plot(E_t_plot, A_t_plot, label="Radio Tau", color=col_radio_tau)
-    ax.scatter(E_t_plot, A_t_plot, color=col_radio_tau)
-    ax.scatter([E_t_plot[-1]], [A_t_plot[-1]], color=col_radio_tau)
+        ax.plot(E_m_plot, A_m_plot, color=GREEN, label="Radio Muon o")
+        ax.scatter(E_m_plot, A_m_plot, color=GREEN, marker=mk_radio_mu, s=18)
+        ax.scatter([E_m_plot[-1]], [A_m_plot[-1]], color=GREEN, marker=mk_radio_mu, s=24)
+    # Radio tau (orange)
+    ax.plot(E_t_plot, A_t_plot, color=ORANGE, label="Radio Tau o")
+    ax.scatter(E_t_plot, A_t_plot, color=ORANGE, marker=mk_radio_tau, s=18)
+    ax.scatter([E_t_plot[-1]], [A_t_plot[-1]], color=ORANGE, marker=mk_radio_tau, s=24)
 
-    # POEMMA, Trinity (lines+points)
-    ax.plot(E_po_GeV, A_po, label="POEMMA Taon", color=col_poemma)
-    ax.scatter(E_po_GeV, A_po, color=col_poemma)
-    ax.plot(E_tr_GeV, A_tr, label="Trinity Taon", color=col_trinity)
-    ax.scatter(E_tr_GeV, A_tr, color=col_trinity)
+    # POEMMA (orange)
+    E_po_GeV, A_po  # already computed
+    ax.plot(E_po_GeV, A_po, color=ORANGE, label="POEMMA Tau (square) 5yr")
+    ax.scatter(E_po_GeV, A_po, color=ORANGE, marker=mk_poemma, s=20)
 
-    # RET-N band
-    ax.fill_between(E_retn_hi_GeV, np.minimum(A_retn_hi, A_retn_lo), np.maximum(A_retn_hi, A_retn_lo), alpha=0.25, color=col_retn_fill, label="RET-N band")
-    ax.plot(E_retn_hi_GeV, A_retn_hi, color=col_retn_hi)
-    ax.plot(E_retn_lo_GeV, A_retn_lo, color=col_retn_lo)
-    ax.scatter(E_retn_hi_GeV, A_retn_hi, color=col_retn_hi)
-    ax.scatter(E_retn_lo_GeV, A_retn_lo, color=col_retn_lo)
+    # Trinity (orange)
+    E_tr_GeV, A_tr  # already computed
+    ax.plot(E_tr_GeV, A_tr, color=ORANGE, label="Trinity Tau x 3yr")
+    ax.scatter(E_tr_GeV, A_tr, color=ORANGE, marker=mk_trinity, s=20)
 
-    # TAMBO
-    ax.plot(tambo_E_GeV, tambo_tau_Aeff_m2, label="TAMBO Tau", color=col_tambo_tau)
-    ax.scatter(tambo_E_GeV, tambo_tau_Aeff_m2, color=col_tambo_tau)
-    ax.plot(tambo_E_GeV, tambo_all_Aeff_m2, label="TAMBO All-Flavor", color=col_tambo_all)
-    ax.scatter(tambo_E_GeV, tambo_all_Aeff_m2, color=col_tambo_all)
+    # RET-N (pink band)
+    ax.fill_between(E_retn_hi_GeV, np.minimum(A_retn_hi, A_retn_lo), np.maximum(A_retn_hi, A_retn_lo),
+                    color=PINK_FILL, alpha=0.25, label="RET-N band (fill between) 5yr")
+    ax.plot(E_retn_hi_GeV, A_retn_hi, color=PINK_EDGE)
+    ax.plot(E_retn_lo_GeV, A_retn_lo, color=PINK_EDGE)
+    ax.scatter(E_retn_hi_GeV, A_retn_hi, color=PINK_EDGE, s=14)
+    ax.scatter(E_retn_lo_GeV, A_retn_lo, color=PINK_EDGE, s=14)
 
-    # IceCube mu/e/tau
-    ax.plot(E_final_GeV, ice_mu, label="IceCube Muon", color=col_ic_mu)
-    ax.scatter(E_final_GeV, ice_mu, color=col_ic_mu)
-    ax.plot(E_final_GeV, ice_el, label="IceCube Electron", color=col_ic_el)
-    ax.scatter(E_final_GeV, ice_el, color=col_ic_el)
-    ax.plot(E_final_GeV, ice_tau, label="IceCube Tau", color=col_ic_tau)
-    ax.scatter(E_final_GeV, ice_tau, color=col_ic_tau)
+    # TAMBO (more points): Tau (orange), Electron (blue)
+    ax.plot(tambo_E_GeV, tambo_all_Aeff_m2, color=ORANGE, label="TAMBO Tau ^ 10yr")
+    ax.scatter(tambo_E_GeV, tambo_all_Aeff_m2, color=ORANGE, marker=mk_tambo_e, s=18)
+    ax.plot(tambo_E_GeV, tambo_el_Aeff_m2,  color=BLUE,   label="TAMBO Electron ^ 10yr")
+    ax.scatter(tambo_E_GeV, tambo_el_Aeff_m2, color=BLUE, marker=mk_tambo_e, s=18)
+
+    # IceCube: delete FIRST tau point
+    ax.plot(E_final_GeV, ice_mu, color=GREEN, label="IceCube Muon D")
+    ax.scatter(E_final_GeV, ice_mu, color=GREEN, marker=mk_ic_mu, s=16)
+    ax.plot(E_final_GeV, ice_el, color=BLUE, label="IceCube Electron D")
+    ax.scatter(E_final_GeV, ice_el, color=BLUE, marker=mk_ic_e, s=16)
+    ax.plot(E_final_GeV[1:], ice_tau[1:], color=ORANGE, label="IceCube Tau D")
+    ax.scatter(E_final_GeV[1:], ice_tau[1:], color=ORANGE, marker=mk_ic_tau, s=16)
 
     ax.set_xlabel("Neutrino energy E [GeV]")
     ax.set_ylabel("Effective Area [m$^2$]")
@@ -278,17 +299,11 @@ def make_radio_plot(icecube_csv_path="friday.csv",
     return out_png
 
 if __name__ == "__main__":
-    candidates = [
-        "radioscaling.csv",
-        "/mnt/data/radioscaling.csv",
-        "/mnt/data/icecube.csv",
-        "/mnt/data/energy_flavor_fractions.csv",
-    ]
-    for c in candidates:
+    csv_candidates = [ "radioscaling.csv", "/mnt/data/icecube.csv", "/mnt/data/energy_flavor_fractions.csv"]
+    for c in csv_candidates:
         if os.path.exists(c):
-            csv_path = c
+            csv_use = c
             break
     else:
-        raise FileNotFoundError("Could not find radioscaling.csv, icecube.csv, or energy_flavor_fractions.csv")
-    png = make_radio_plot(csv_path)
-    print("Saved plot:", png)
+        raise FileNotFoundError("No scaling CSV found.")
+    print(make_plot(csv_use))
