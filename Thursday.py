@@ -102,7 +102,7 @@ E2Phi_retn_lo = [r[2] for r in RETN_data]  # lower curve
 T_retn        = 3.0
 mu90_retn     = 2.3
 # Replace with actual RET-N beam/coverage if narrower than a hemisphere
-Omega_retn    = 2*np.pi
+Omega_retn    = 2*np.pi/12
 
 # --- TAMBO: two lines (all-flavor & tau) from aperture arrays (m^2 sr) → A_eff (m^2)
 # Energies in GeV
@@ -180,7 +180,7 @@ curves = []
 E_rnog_GeV, Aeff_rnog = effective_area_from_sensitivity(
     E_rnog_eV, E2Phi_rnog, E_units="eV", T_years=T_rnog, mu90=mu90_rnog, DeltaOmega=Omega_rnog
 )
-curves.append(("RNO-G Taon (T=5 yr)", E_rnog_GeV, Aeff_rnog))
+curves.append(("RNO-G All Flavor (T=5 yr)", E_rnog_GeV, Aeff_rnog))
 
 # IceCube-Gen2 Radio
 E_gen2_GeV, Aeff_gen2 = effective_area_from_sensitivity(
