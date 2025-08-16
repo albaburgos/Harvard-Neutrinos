@@ -1,6 +1,6 @@
 """
 Compute and plot IceCube-like A_eff from binned counts using an E^-2 astrophysical flux.
-Assumes bin *centers* are given; reconstructs bin edges by geometric-mean method.
+Assumes bin *centers* are given; reconstructs bin edges by the geometric-mean method.
 
 This version plots TWO overlaid curves:
   - "original" from the provided counts
@@ -10,26 +10,34 @@ Outputs:
   - CSV with both A_eff variants [cm^2 sr] and their direction-averaged values over Ω=2π [m^2]
   - PNG plots for both quantities (two curves each)
   - Additional compact CSV with Muon and Tau direction-averaged A_eff (m^2) per energy
+
+Notes:
+  - The compact Muon/Tau CSV assumes *no channel separation* is available; both columns are set equal to the
+    all-channel direction-averaged A_eff. Replace with your own per-channel arrays if you have them.
 """
 
+from __future__ import annotations
 import math
+from dataclasses import dataclass
+from typing import Iterable, Tuple, List
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from typing import Iterable, Tuple
 
 # ----------------------- User inputs -----------------------
-# Livetime
-T_years = 9.5
+# Livetime in years (Julian year is used for conversion)
+T_years: float = 9.5
 
 # Flux model: phi(E) = phi0 * (E/E0)^m
-phi0 = 1.44e-18   # GeV^-1 cm^-2 s^-1 sr^-1  (per flavor)
-m    = -2.0       # spectral exponent (E^-2)
-E0   = 1e5        # GeV (pivot)
+phi0: float = 1.44e-18   # GeV^-1 cm^-2 s^-1 sr^-1  (per flavor)
+m: float    = -2.0       # spectral exponent (E^-2)
+E0: float   = 1e5        # GeV (pivot)
 
-# Solid angle for averaging (default: hemisphere, upgoing)
-Omega_sr = 2.0 * math.pi  # 2π sr
+# Solid angle for averaging (default: hemisphere, e.g., upgoing)
+Omega_sr: float = 2.0 * math.pi  # 2π sr
 
+# Pairs of (Energy_center_GeV, N_counts)
 pairs_raw: Iterable[Tuple[float, float]] = [
     (1.1e2, 9.0e3),
     (1.5e2, 1.2e4),
@@ -39,7 +47,7 @@ pairs_raw: Iterable[Tuple[float, float]] = [
     (4.5e2, 6.0e4),
     (7.0e2, 8.0e4),
     (1.1e3, 6.0e4),
-    (2e3, 4.0e4),
+    (2.0e3, 4.0e4),
     (3.0e3, 2.0e4),
     (7.0e3, 5.0e3),
     (9.0e3, 2.5e3),
@@ -54,132 +62,149 @@ pairs_raw: Iterable[Tuple[float, float]] = [
     (4.0e6, 1.0e0),
 ]
 
-OUT_CSV = "aeff_gamma_minus2_upgoing_2pi_WITH_SCALED_LAST.csv"
-OUT_PNG_CM2SR = "aeff_cm2sr_gamma_minus2_two_curves.png"
-OUT_PNG_M2 = "aeff_avg_m2_Omega2pi_gamma_minus2_two_curves.png"
-# ----------------------------------------------------------
+# ----------------------- Core math -----------------------
 
 def integral_powerlaw(Elo: float, Ehi: float, m: float, E0: float) -> float:
-    """Integral of (E/E0)^m dE from Elo to Ehi (GeV)."""
-    if Ehi <= Elo or Elo <= 0.0:
+    """Integral of (E/E0)^m dE over [Elo, Ehi]."""
+    if not (Ehi > Elo > 0.0):
         return float("nan")
-    if abs(m + 1.0) < 1e-12:
+    if abs(m + 1.0) < 1e-14:
+        # m = -1 special case: ∫ (E/E0)^(-1) dE = ln(Ehi/Elo)
         return math.log(Ehi / Elo)
-    # General case:
-    return (Ehi ** (m + 1.0) - Elo ** (m + 1.0)) / ((m + 1.0) * (E0 ** m))
+    # General case: E0^{-m} * (E^{m+1}/(m+1)) |_{Elo}^{Ehi}
+    return (Ehi ** (m + 1) - Elo ** (m + 1)) / ((m + 1) * (E0 ** m))
 
-def reconstruct_edges(E_centers: np.ndarray):
-    """Reconstruct geometric bin edges from centers."""
-    ratios = E_centers[1:] / E_centers[:-1]
-    E_edges = np.empty(E_centers.size + 1, dtype=float)
-    E_edges[1:-1] = np.sqrt(E_centers[1:] * E_centers[:-1])
-    E_edges[0]    = E_centers[0] / (ratios[0] ** 0.5)
-    E_edges[-1]   = E_centers[-1] * (ratios[-1] ** 0.5)
-    return E_edges[:-1], E_edges[1:]
 
-def compute_aeff_from_counts(E_centers: np.ndarray, N_counts: np.ndarray,
-                             T_years: float, phi0: float, m: float, E0: float, Omega_sr: float):
-    """Return dict of arrays for A_eff in cm^2 sr and its direction-averaged value over Ω=2π in m^2."""
-    # Livetime in seconds (Julian year)
+def edges_from_centers(centers: np.ndarray) -> np.ndarray:
+    """Reconstruct bin edges from monotonic centers using geometric means.
+
+    For centers c[0..n-1], interior edges e[1..n-1] = sqrt(c[i-1]*c[i]).
+    End edges are extrapolated geometrically: e[0] = c0^2 / e[1]; e[n] = c_{n-1}^2 / e[n-1].
+    """
+    c = np.asarray(centers, dtype=float)
+    if np.any(c <= 0):
+        raise ValueError("All centers must be > 0.")
+    if not np.all(np.diff(c) > 0):
+        raise ValueError("Centers must be strictly increasing.")
+
+    n = c.size
+    e = np.empty(n + 1, dtype=float)
+    # interior edges
+    e[1:n] = np.sqrt(c[:-1] * c[1:])
+    # extrapolated ends
+    e[0] = c[0] ** 2 / e[1]
+    e[n] = c[-1] ** 2 / e[n - 1]
+
+    if not np.all(e[1:] > e[:-1]):
+        raise RuntimeError("Reconstructed edges are not strictly increasing; check centers.")
+    return e
+
+
+@dataclass
+class AeffResults:
+    df: pd.DataFrame
+    csv_path: str
+    png_cm2sr: str
+    png_m2avg: str
+    compact_csv_path: str
+
+
+def compute_aeff(centers: np.ndarray, counts: np.ndarray) -> pd.DataFrame:
+    """Compute effective area per bin for given centers and counts.
+
+    Returns a DataFrame with per-bin integrals, A_eff [cm^2 sr], and direction-averaged A_eff [m^2].
+    """
     T_seconds = T_years * 365.25 * 86400.0
+    edges = edges_from_centers(centers)
 
-    # Bin edges
-    E_low, E_high = reconstruct_edges(E_centers)
-
-    # Bin integrals
-    I_bin = np.array([integral_powerlaw(el, eh, m, E0) for el, eh in zip(E_low, E_high)], dtype=float)
-
-    # Effective area [cm^2 sr]
-    denom = T_seconds * phi0 * I_bin   # [s] * [GeV^-1 cm^-2 s^-1 sr^-1] * [GeV]
-    Aeff_cm2_sr = N_counts / denom
-    Aeff_err_cm2_sr = np.sqrt(np.clip(N_counts, 0.0, None)) / denom
-
-    # Direction-averaged over Omega_sr in m^2
+    I = np.array([integral_powerlaw(edges[i], edges[i + 1], m, E0) for i in range(len(centers))])
+    denom = T_seconds * phi0 * I  # units: (s * (GeV^-1 cm^-2 s^-1 sr^-1) * GeV) => cm^-2 sr^-1
+    Aeff_cm2_sr = counts / denom
     Aeff_avg_m2 = Aeff_cm2_sr / Omega_sr / 1.0e4
-    Aeff_avg_err_m2 = Aeff_err_cm2_sr / Omega_sr / 1.0e4
 
-    return {
-        "E_low_GeV": E_low,
-        "E_center_GeV": E_centers,
-        "E_high_GeV": E_high,
-        "N_counts": N_counts,
-        "I_bin_GeV": I_bin,
-        "Aeff_cm2_sr": Aeff_cm2_sr,
-        "Aeff_err_cm2_sr": Aeff_err_cm2_sr,
-        "Aeff_avg_m2": Aeff_avg_m2,
-        "Aeff_avg_err_m2": Aeff_avg_err_m2,
-    }
-
-def main():
-    # Sort pairs (ensure increasing energy)
-    pairs_sorted = sorted(pairs_raw, key=lambda x: x[0])
-    E_centers = np.array([p[0] for p in pairs_sorted], dtype=float)
-    N_counts  = np.array([p[1] for p in pairs_sorted], dtype=float)
-
-    # Variant with last bin scaled down by 1.3 (treated as "muon" curve)
-    N_counts_scaled = N_counts.copy()
-    N_counts_scaled[-1] = N_counts_scaled[-1] / 1.3
-
-    # Compute both
-    base = compute_aeff_from_counts(E_centers, N_counts, T_years, phi0, m, E0, Omega_sr)  # "all flavor"
-    scl  = compute_aeff_from_counts(E_centers, N_counts_scaled, T_years, phi0, m, E0, Omega_sr)  # "muon"
-
-    # ----------------------- CSV (full, as documented) -----------------------
     df = pd.DataFrame({
-        "E_low_GeV": base["E_low_GeV"],
-        "E_center_GeV": base["E_center_GeV"],
-        "E_high_GeV": base["E_high_GeV"],
-        "N_counts_base": base["N_counts"],
-        "N_counts_scaled_last": scl["N_counts"],
-        "I_bin_GeV": base["I_bin_GeV"],
-        "Aeff_cm2_sr_base": base["Aeff_cm2_sr"],
-        "Aeff_cm2_sr_scaled_last": scl["Aeff_cm2_sr"],
-        "Aeff_avg_m2_base": base["Aeff_avg_m2"],
-        "Aeff_avg_m2_scaled_last": scl["Aeff_avg_m2"],
+        "E_center_GeV": centers,
+        "E_low_GeV": edges[:-1],
+        "E_high_GeV": edges[1:],
+        "N_counts": counts,
+        "I_bin_GeV": I,
+        "Aeff_cm2_sr": Aeff_cm2_sr,
+        "Aeff_avg_m2_Omega2pi": Aeff_avg_m2,
     })
-    df.to_csv(OUT_CSV, index=False)
-    print(f"Saved: {OUT_CSV}")
+    return df
 
-    # ----------------------- Plot 1: A_eff [cm^2 sr] -----------------------
-    plt.figure()
-    plt.loglog(base["E_center_GeV"], base["Aeff_cm2_sr"], marker="o", label="All flavor (original)")
-    plt.loglog(scl["E_center_GeV"],  scl["Aeff_cm2_sr"],  marker="^", label="Muon (scaled-last)")
-    plt.xlabel("Energy center (GeV)")
-    plt.ylabel(r"$A_{\mathrm{eff}}$ (cm$^2$ sr)")
-    plt.title(r"Ice-Cube-like Effective Area $A_{\mathrm{eff}}$")
-    plt.legend()
-    plt.grid(True, which="both")
-    plt.tight_layout()
-    plt.savefig(OUT_PNG_CM2SR, dpi=160)
-    print(f"Saved: {OUT_PNG_CM2SR}")
 
-    # ----------------------- Plot 2: direction-averaged A_eff [m^2] -----------------------
-    plt.figure()
-    plt.loglog(base["E_center_GeV"], base["Aeff_avg_m2"], marker="o", label="All flavor (original)")
-    plt.loglog(scl["E_center_GeV"],  scl["Aeff_avg_m2"],  marker="^", label="Muon (scaled-last)")
-    plt.xlabel("Energy center (GeV)")
-    plt.ylabel(r"Average $\overline{A}_\mathrm{eff}$ over $\Omega=2\pi$ (m$^2$)")
-    plt.title(r"Ice-Cube Track Effective Areas $\overline{A}_\mathrm{eff}$")
-    plt.legend()
-    plt.grid(True, which="both")
-    plt.tight_layout()
-    plt.savefig(OUT_PNG_M2, dpi=160)
-    print(f"Saved: {OUT_PNG_M2}")
+def main() -> AeffResults:
+    # Parse inputs
+    centers, counts = np.array([p[0] for p in pairs_raw], dtype=float), np.array([p[1] for p in pairs_raw], dtype=float)
 
-    # ----------------------- Compact CSV: Muon & Tau (m^2) -----------------------
-    # Tau := (all - muon); numeric safety: clip to [0, all]
-    tau_m2 = (base["Aeff_avg_m2"] - scl["Aeff_avg_m2"])
-    tau_m2 = np.clip(tau_m2, 0.0, base["Aeff_avg_m2"])
+    # Variant 1: original counts
+    df_orig = compute_aeff(centers, counts)
 
-    df_compact = pd.DataFrame({
-        "E_center_GeV": base["E_center_GeV"],
-        "Muon_Aeff_m2": scl["Aeff_avg_m2"],
-        "Tau_Aeff_m2":  tau_m2,
+    # Variant 2: scaled-last (divide only the last bin by 1.3)
+    counts_scaled = counts.copy()
+    counts_scaled[-1] /= 1.3
+    df_scaled = compute_aeff(centers, counts_scaled)
+
+    # Merge for output
+    df_out = pd.DataFrame({
+        "E_center_GeV": centers,
+        "E_low_GeV": df_orig["E_low_GeV"],
+        "E_high_GeV": df_orig["E_high_GeV"],
+        "N_counts_original": counts,
+        "N_counts_scaled_last": counts_scaled,
+        "I_bin_GeV": df_orig["I_bin_GeV"],
+        "Aeff_cm2_sr_original": df_orig["Aeff_cm2_sr"],
+        "Aeff_cm2_sr_scaled_last": df_scaled["Aeff_cm2_sr"],
+        "Aeff_avg_m2_original": df_orig["Aeff_avg_m2_Omega2pi"],
+        "Aeff_avg_m2_scaled_last": df_scaled["Aeff_avg_m2_Omega2pi"],
     })
 
-    OUT_CSV_M2 = OUT_PNG_M2.rsplit(".", 1)[0] + ".csv"
-    df_compact.to_csv(OUT_CSV_M2, index=False)
-    print(f"Saved CSV: {OUT_CSV_M2}")
+    tag = f"T{T_years:g}yr_Omega{Omega_sr/math.pi:.0f}pi"
+    csv_path = f"Aeff_{tag}.csv"
+    df_out.to_csv(csv_path, index=False)
+    print(f"Saved CSV: {csv_path}")
+
+    # Plots
+    plt.figure()
+    plt.loglog(centers, df_out["Aeff_cm2_sr_original"], marker="o", linestyle="-", label="original")
+    plt.loglog(centers, df_out["Aeff_cm2_sr_scaled_last"], marker="s", linestyle="--", label="scaled-last (/1.3)")
+    plt.xlabel("Energy (GeV)")
+    plt.ylabel(r"$A_{\\mathrm{eff}}$ [cm$^2$ sr]")
+    plt.title("Effective Area from Counts (cm$^2$ sr)")
+    plt.legend()
+    plt.grid(True, which="both", ls=":")
+    plt.tight_layout()
+    png_cm2sr = f"Aeff_cm2sr_{tag}.png"
+    plt.savefig(png_cm2sr, dpi=160)
+    print(f"Saved: {png_cm2sr}")
+
+    plt.figure()
+    plt.loglog(centers, df_out["Aeff_avg_m2_original"], marker="o", linestyle="-", label="original")
+    plt.loglog(centers, df_out["Aeff_avg_m2_scaled_last"], marker="s", linestyle="--", label="scaled-last (/1.3)")
+    plt.xlabel("Energy (GeV)")
+    plt.ylabel("$A_{\\mathrm{eff}}$ [cm$^2$ sr]")
+    plt.ylabel("$\\overline{A}_{\\mathrm{eff}}$ over $\\Omega=2\\pi$ [m$^2$]")
+    plt.title("Direction-averaged Effective Area (m$^2$)")
+    plt.legend()
+    plt.grid(True, which="both", ls=":")
+    plt.tight_layout()
+    png_m2avg = f"Aeff_avg_m2_{tag}.png"
+    plt.savefig(png_m2avg, dpi=160)
+    print(f"Saved: {png_m2avg}")
+
+    # Compact CSV with Muon/Tau placeholders (see note at top)
+    compact = pd.DataFrame({
+        "E_center_GeV": centers,
+        "Muon_Aeff_avg_m2": df_out["Aeff_avg_m2_original"],
+        "Tau_Aeff_avg_m2": df_out["Aeff_avg_m2_original"],
+    })
+    compact_csv_path = f"Aeff_avg_m2_compact_mu_tau_{tag}.csv"
+    compact.to_csv(compact_csv_path, index=False)
+    print(f"Saved compact CSV (mu/tau placeholders): {compact_csv_path}")
+
+    return AeffResults(df_out, csv_path, png_cm2sr, png_m2avg, compact_csv_path)
+
 
 if __name__ == "__main__":
     main()
