@@ -73,10 +73,28 @@ def annotate_fraction_ticks(ax, step=0.1, fontsize=8, alpha=0.75):
         fe, fmu, ftau = (1.0 - p) / 2.0, (1.0 - p) / 2.0, p
         x, y = bary_to_xy(fe, fmu, ftau); ax.text(x, y, f"{p:.2g}", ha="center", va="center", fontsize=fontsize, alpha=alpha)
 
-def label_axes(ax):
-    ax.text(0.0, 0.0 - 0.02, r"$\nu_e$", ha="right", va="top")
-    ax.text(1.0 , 0.0 - 0.02, r"$\nu_\mu$", ha="left", va="top")
-    ax.text(0.5, SQ3_OVER_2 -0.05, r"$\nu_\tau$", ha="center", va="bottom")
+def label_axes(ax, *, show_long_names=True, fs_symbol=12, fs_long=9, pad=0.08):
+
+    mid_y = SQ3_OVER_2 / 2.0
+
+    # --- Bottom edge (y=0): f_tau ---
+    ax.text(0.5, -pad, r"$f_\mu$", ha="center", va="top", fontsize=fs_symbol)
+    if show_long_names:
+        ax.text(0.5, -(pad + 0.05), "fraction of muon", ha="center", va="top", fontsize=fs_long)
+
+    # --- Left edge: f_mu ---
+    ax.text(-pad, mid_y, r"$f_\tau$", ha="right", va="center",
+            fontsize=fs_symbol, rotation=60)
+    if show_long_names:
+        ax.text(-(pad + 0.03), mid_y, "fraction of taon", ha="right", va="center",
+                fontsize=fs_long, rotation=60)
+
+    # --- Right edge: f_e ---
+    ax.text(1.0 + pad, mid_y, r"$f_e$", ha="left", va="center",
+            fontsize=fs_symbol, rotation=-60)
+    if show_long_names:
+        ax.text(1.0 + pad + 0.03, mid_y, "fraction of electron", ha="left", va="center",
+                fontsize=fs_long, rotation=-60)
 
 # ---- Gaussian (elliptical) helpers
 def safe_cov_inv(xs, ys):
@@ -140,7 +158,6 @@ def plot_one_row(ax, r, rng):
     # Triangle, grid, ticks
     draw_triangle(ax)
     draw_fraction_grid(ax, step=float(GRID_STEP))
-    annotate_fraction_ticks(ax, step=float(GRID_STEP), fontsize=float(TICK_FONTSZ))
 
     # Raw scatter samples (optional)
     if SHOW_BLOB:
