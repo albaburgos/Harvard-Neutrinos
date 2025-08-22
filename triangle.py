@@ -5,10 +5,6 @@ NSAMPLES     = 3000
 GRID_STEP    = 0.1
 TICK_FONTSZ  = 8.0
 
-# KDE-style heatmap (non-elliptical) — not used if False
-KDE_BINS     = 220
-KDE_SIGMA    = 1.2
-
 # Scatter and contours
 SHOW_BLOB    = True
 CONTOUR_LINEWIDTH = 2.0
@@ -30,9 +26,11 @@ from pathlib import Path
 SQ3_OVER_2 = math.sqrt(3) / 2.0
 
 def bary_to_xy(f_e, f_mu, f_tau):
-    x = f_mu * 1.0 + f_tau * 0.5
+    # Swap e ↔ μ axes: x now tracks f_e (previously f_μ).
+    x = f_e * 1.0 + f_tau * 0.5
     y = f_tau * SQ3_OVER_2
     return x, y
+
 
 def inside_triangle_mask(xg, yg):
     left = yg / math.sqrt(3.0)
@@ -74,26 +72,25 @@ def annotate_fraction_ticks(ax, step=0.1, fontsize=8, alpha=0.75):
         x, y = bary_to_xy(fe, fmu, ftau); ax.text(x, y, f"{p:.2g}", ha="center", va="center", fontsize=fontsize, alpha=alpha)
 
 def label_axes(ax, *, show_long_names=True, fs_symbol=12, fs_long=9, pad=0.08):
-
     mid_y = SQ3_OVER_2 / 2.0
 
-    # --- Bottom edge (y=0): f_tau ---
+    # --- Bottom edge (y=0): f_e (swapped from f_μ) ---
     ax.text(0.5, -pad, r"$f_\mu$", ha="center", va="top", fontsize=fs_symbol)
     if show_long_names:
-        ax.text(0.5, -(pad + 0.05), "fraction of muon", ha="center", va="top", fontsize=fs_long)
+        ax.text(0.5, -(pad + 0.05), "fraction of muon neutrino", ha="center", va="top", fontsize=fs_long)
 
-    # --- Left edge: f_mu ---
+    # --- Left edge: f_τ ---
     ax.text(-pad, mid_y, r"$f_\tau$", ha="right", va="center",
             fontsize=fs_symbol, rotation=60)
     if show_long_names:
-        ax.text(-(pad + 0.03), mid_y, "fraction of taon", ha="right", va="center",
+        ax.text(-(pad + 0.03), mid_y, "fraction of tau neutrino", ha="right", va="center",
                 fontsize=fs_long, rotation=60)
 
-    # --- Right edge: f_e ---
+    # --- Right edge: f_μ (swapped from f_e) ---
     ax.text(1.0 + pad, mid_y, r"$f_e$", ha="left", va="center",
             fontsize=fs_symbol, rotation=-60)
     if show_long_names:
-        ax.text(1.0 + pad + 0.03, mid_y, "fraction of electron", ha="left", va="center",
+        ax.text(1.0 + pad + 0.03, mid_y, "fraction of electron neutrino", ha="left", va="center",
                 fontsize=fs_long, rotation=-60)
 
 # ---- Gaussian (elliptical) helpers
@@ -152,8 +149,9 @@ def plot_one_row(ax, r, rng):
     mask = Ntot_s > 0
     Ne_s, Nmu_s, Ntau_s, Ntot_s = Ne_s[mask], Nmu_s[mask], Ntau_s[mask], Ntot_s[mask]
     fe_s, fmu_s, ftau_s = Ne_s/Ntot_s, Nmu_s/Ntot_s, Ntau_s/Ntot_s
-    xs = fmu_s * 1.0 + ftau_s * 0.5
-    ys = ftau_s * SQ3_OVER_2
+
+    # Use the shared barycentric mapping (with e↔μ swapped)
+    xs, ys = bary_to_xy(fe_s, fmu_s, ftau_s)
 
     # Triangle, grid, ticks
     draw_triangle(ax)
@@ -218,3 +216,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+    

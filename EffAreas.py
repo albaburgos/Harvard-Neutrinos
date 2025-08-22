@@ -7,7 +7,32 @@ import matplotlib.pyplot as plt
 
 SEC_PER_YEAR = 365.25 * 24 * 3600.0
 
-def effective_area_from_sensitivity(E_pts, E2Phi_pts, *, E_units="GeV", T_years, mu90=2.3, DeltaOmega=2*np.pi):
+class FluxModel:
+
+    def __init__(self, phi0_per_flavor=1.68e-18, gamma=2.58, E0=1e5):
+        self.phi0_per_flavor = float(phi0_per_flavor)
+        self.gamma = float(gamma)
+        self.E0 = float(E0)
+
+    def phi(self, E_GeV, flavor=None):
+        E = np.asarray(E_GeV, dtype=float)
+        return self.phi0_per_flavor * (E / self.E0) ** (-self.gamma)
+    
+def interp_loglog(x_new, x, y, eps=1e-300):
+    x   = np.asarray(x);     y   = np.asarray(y)
+    x_new = np.asarray(x_new)
+
+    # guard against zeros/negatives for log10
+    y_safe = np.where(y > 0, y, eps)
+
+    y_new = 10.0 ** np.interp(
+        np.log10(x_new),
+        np.log10(x),
+        np.log10(y_safe)
+    )
+    return y_new
+
+def effective_area_from_sensitivity(E_pts, E2Phi_pts, *, E_units="GeV", T_years, mu90=2.3, DeltaOmega):
     E = np.asarray(E_pts, dtype=float)
     E2Phi = np.asarray(E2Phi_pts, dtype=float)
 
@@ -30,7 +55,6 @@ def effective_area_from_sensitivity(E_pts, E2Phi_pts, *, E_units="GeV", T_years,
     dlog10E = np.log10(edges[1:]) - np.log10(edges[:-1])
     dE = E_GeV * np.log(10.0) * dlog10E
 
-    # Convert E^2 Phi -> Phi
     Phi = E2Phi / (E_GeV)**2
 
     T_sec = T_years * SEC_PER_YEAR
@@ -39,6 +63,7 @@ def effective_area_from_sensitivity(E_pts, E2Phi_pts, *, E_units="GeV", T_years,
     Aeff_cm2 = mu90 / (T_sec * DeltaOmega * Phi * dE)
     Aeff_m2 = Aeff_cm2 / 1e4
     return E_GeV, Aeff_m2
+
 
 def log_interp(x, xp, fp):
     """Log-log linear interpolation. Returns 0 outside the positive range."""
@@ -56,6 +81,23 @@ def log_interp(x, xp, fp):
     y[np.isnan(y)] = 0.0
     return y
 
+
+def effective_area_from_Nevents(E_edges, N, T_years, DeltaOmega, phi0, gamma, FluxModelCls=FluxModel, E0=1e5):
+    E_edges = np.asarray(E_edges, dtype=float)
+    N = np.asarray(N, dtype=float)
+    nbins = E_edges.size - 1
+    E_centers = np.sqrt(E_edges[:-1] * E_edges[1:])
+    dlog10E = np.diff(np.log10(E_edges))         
+    dE = E_centers * np.log(10.0) * dlog10E   
+    T_sec = float(T_years) * SEC_PER_YEAR
+
+    flux = FluxModelCls(phi0, gamma, E0=E0)
+    flux_ic = flux.phi(E_centers, 'all')      
+
+    Aeff_cm2 = N / (T_sec * DeltaOmega * flux_ic * dE)
+    Aeff_m2 = Aeff_cm2/1e4
+    return E_centers, Aeff_m2
+
 # --------------------------- Radio experiments ------------------------------
 E_rnog_eV   = np.array([3e16, 1e17, 3e17, 1e18, 4e18, 1e19, 4e19])
 E2Phi_rnog  = np.array([2e-8,  9e-9,  6.5e-9, 5.5e-9, 5e-9,  6e-9,  8e-9])
@@ -71,11 +113,15 @@ T_grand       = 3.0; mu90_grand = 2.44; Omega_grand = 2*np.pi
 
 E_ic_GeV = np.array([1.5e4,4e4,6e4,8e4,1e5,2e5,4e5,6e5,1e6, 2e6,4e6])
 E2Phi_ic = np.array([2.9e-8,2e-8,1.8e-8,1.6e-8, 1.5e-8, 1.2e-8, 8.7e-9, 6.3e-9, 6.15e-9, 4.8e-9, 3.7e-9])
-T_ic      = 9.5; mu90_ic   = 2.3; Omega_ic  = 2*np.pi
+T_ic      = 9.5; mu90_ic   = 2.3; Omega_ic  = 4*np.pi
+
+E_ic_GeV = np.array([1.5e4, 4e4, 6e4, 8e4, 1e5, 2e5, 4e5, 6e5, 1e6, 2e6, 4e6], dtype=float)
+E2Phi_ic = np.array([2.9e-8, 2e-8, 1.8e-8, 1.6e-8, 1.5e-8, 1.2e-8, 8.7e-9, 6.3e-9, 6.15e-9, 4.8e-9, 3.7e-9], dtype=float)
 
 E_ic_GeV, A_ic = effective_area_from_sensitivity(
     E_ic_GeV, E2Phi_ic, E_units="GeV", T_years=T_ic, mu90=mu90_ic, DeltaOmega=Omega_ic
 )
+
 
 # Convert to A_eff
 E_rnog_GeV,  Aeff_rnog  = effective_area_from_sensitivity(
@@ -124,7 +170,6 @@ if fe_g is None:
     fmu_g = np.full_like(E_grid_radio, 1/3, dtype=float)
     ft_g  = np.full_like(E_grid_radio, 1/3, dtype=float)
 
-# Per-flavor *points* (connect with lines) + Gaussian error bars
 def fractions_at(E):
     fe = log_interp(E, E_grid_radio, fe_g)
     fmu = log_interp(E, E_grid_radio, fmu_g)
@@ -163,57 +208,69 @@ E_trinity_GeV = np.array([1e5, 4e5, 1e6, 4e6, 1e7, 7e7, 4e8, 3e9, 1e10, 4e10])
 E2Phi_trinity = np.array([2e-7, 3e-8, 1e-8, 2e-9, 1e-9, 5e-10, 7e-10, 3e-9, 8e-9, 4e-8])
 T_trinity     = 3.0
 mu90_trinity  = 2.3
-Omega_trinity = 2*np.pi
+Omega_trinity = 6/36*(np.pi*2)
 E_tr_GeV, A_tr = effective_area_from_sensitivity(
     E_trinity_GeV, E2Phi_trinity, E_units="GeV", T_years=T_trinity, mu90=mu90_trinity, DeltaOmega=Omega_trinity
 )
 
 # ------------------------------ TAMBO (AΩ) ---------------------------------
+tambo_angle = 2*np.pi
 tambo_E_GeV_base = np.array([1e5, 1e6, 2e6, 4e6, 5e6, 6e6, 7e6, 8e6, 1e7, 3e7, 1e8, 4e8, 1e9], dtype=float)
-tambo_tau_ap_m2sr_base = np.array([1, 50, 100, 500, 600, 3000, 4000, 3000, 2000, 6000, 20000, 40000, 50000], dtype=float)
-tambo_all_ap_m2sr_base = np.array([1, 50, 100, 500, 700, 800, 1000, 1200, 2000, 6000, 20000, 40000, 50000], dtype=float)
+tambo_all_ap_m2sr_base = np.array([1, 50, 100, 500, 600, 3000, 4000, 3000, 2000, 6000, 20000, 40000, 50000], dtype=float)
+tambo_tau_ap_m2sr_base = np.array([1, 50, 100, 500, 700, 800, 1000, 1200, 2000, 6000, 20000, 40000, 50000], dtype=float)
 
 E_tambo = np.logspace(np.log10(tambo_E_GeV_base.min()), np.log10(tambo_E_GeV_base.max()), 200)
 AOm_tambo_tau = log_interp(E_tambo, tambo_E_GeV_base, tambo_tau_ap_m2sr_base)     
 AOm_tambo_all = log_interp(E_tambo, tambo_E_GeV_base, tambo_all_ap_m2sr_base)       
-AOm_tambo_e   = np.abs(AOm_tambo_all - AOm_tambo_tau)                 
+AOm_tambo_e   = np.abs(AOm_tambo_all - AOm_tambo_tau)            
 
-# -------------------------- IceCube Cascades (AΩ) ---------------------------
-IC_casc_E_center = np.array([
-    5.011900693349779e2, 7.943299062732058e2, 1.2589281155014372e3,
-    1.9952719889779437e3, 3.1622974385721527e3, 5.011900693349779e3,
-    7.943299062732058e3, 1.2589281155014372e4, 1.9952719889779437e4,
-    3.162297438572153e4, 5.0119006933497796e4, 7.943299062732059e4,
-    1.9952719889779435e5, 3.162297438572153e5, 5.0119006933497795e5,
-    7.943299062732059e5,
-])
-IC_casc_AOm_mu = np.array([
-    0.003148481157771042, 0.013972008590113834, 0.03954236811412915,
-    0.08397919480714747, 0.14303075652198077, 0.22669064335951497,
-    0.3243501994133569, 0.39542368114129145, 0.5013683272068507,
-    0.5562307198077029, 0.5667266083987874, 0.49900030678977975,
-    0.7520524908102761, 0.794615314011004, 0.8186051010204706,
-    0.8483005215426258,
-])
-IC_casc_AOm_e = np.array([
-    0.013521737919122976, 0.06122998933555752, 0.19408234784519426,
-    0.42295383641785644, 0.7312764121695474, 1.1590061073533977,
-    1.775669690731168, 2.3775087611036296, 2.7684251110986966,
-    2.681346844621674, 3.0906829529423936, 3.0614994667778754,
-    3.3964410872908988, 3.0760279012207756, 3.6563820608477364,
-    3.4770183220601925,
-])
-IC_casc_AOm_tau = np.array([
-    0.008517630185274317, 0.03857007202239844, 0.12225659706783892,
-    0.26642761349156313, 0.460646558846959, 0.730082587309227,
-    1.1185320886495547, 1.4976433140810266, 1.7438898337629587,
-    1.6890373824388498, 1.9468868994912716, 1.9285036011199217,
-    2.1394904486871806, 1.9376553708477326, 2.3032327942347948,
-    2.1902477619276803,
-])
+A_tambo_e = AOm_tambo_e / tambo_angle
+A_tambo_tau = AOm_tambo_tau / tambo_angle
+
+# -------------------------- IceCube Cascades (Nevents) ---------------------------
+
+E_min_log10_mu,  E_max_log10_mu  = 2.6, 5.8
+E_min_log10_et,  E_max_log10_et  = 2.6, 6.8
+step_dex = 0.2
+num_mu   = int(round((E_max_log10_mu - E_min_log10_mu) / step_dex)) + 1  # 22 edges
+num_etau = int(round((E_max_log10_et - E_min_log10_et) / step_dex)) + 1  # 27 edges
+E_edges_mu   = np.logspace(E_min_log10_mu, E_max_log10_mu,   num=num_mu,   base=10.0)
+E_edges_etau = np.logspace(E_min_log10_et, E_max_log10_et,   num=num_etau, base=10.0)
+
+N_muons = np.array([1.0, 2.8, 5.0, 6.7, 7.2, 7.2, 6.5, 5.0,
+                    4.0, 2.8, 1.8, 1.0, 0.6, 0.4, 0.26, 0.17], dtype=float)
+
+N_etau = np.array([7.0, 20.0, 4e1, 5.5e1, 6e1, 6e1, 5.8e1, 4.9e1, 3.6e1,
+                   2.2e1, 1.6e1, 1.0e1, 7.0, 4.0, 3.0, 1.8, 1.0, 0.7, 0.4, 0.36, 0.4], dtype=float)
+
+phi0_casc = 1.68e-18
+gamma_casc = 2.53
+
+E_mu,  A_ic_cascade_mu = effective_area_from_Nevents(E_edges_mu,  N_muons, 6, Omega_ic, phi0_casc, gamma_casc)
+E_et,  A_ic_cascade_etau  = effective_area_from_Nevents(E_edges_etau, N_etau,  6, Omega_ic, phi0_casc, gamma_casc)
+
+frac_e1 = 127 / (80 + 127)
+frac_e2 = (303 - 127) / ((204 - 80) + (303 - 127))
+
+mask_low  = E_et < 1e4
+mask_high = ~mask_low
+
+A_ic_cascade_e   = np.empty_like(A_ic_cascade_etau)
+A_ic_cascade_tau = np.empty_like(A_ic_cascade_etau)
+
+A_ic_cascade_e[mask_low]   = frac_e1 * A_ic_cascade_etau[mask_low]
+A_ic_cascade_e[mask_high]  = frac_e2 * A_ic_cascade_etau[mask_high]
+
+A_ic_cascade_tau[mask_low]  = (1 - frac_e1) * A_ic_cascade_etau[mask_low]
+A_ic_cascade_tau[mask_high] = (1 - frac_e2) * A_ic_cascade_etau[mask_high]
 
 
-# --------------------------- Plot: A_eff + AΩ -------------------------------
+E_ic_mu = np.logspace(2.6, 6.4, num=20, base=10.0)
+A_ic_mucasc  = log_interp(E_ic_mu, E_mu,       A_ic_cascade_mu)
+A_ic_mutrack = log_interp(E_ic_mu, E_ic_GeV,   A_ic)
+A_ic_mu = A_ic_mucasc + A_ic_mutrack
+
+# --------------------------- Plot: A_eff -------------------------------
 fig, ax_left = plt.subplots(figsize=(9,6), dpi=140)  # Left axis: A_eff (m^2)
 
 # Helper: error bars with lines, safe for log-y
@@ -226,18 +283,17 @@ def errorline(ax, x, y, label):
     sigma = np.sqrt(y)
     ax.errorbar(x, y, fmt='o-', capsize=3, markersize=4, linewidth=1.2, label=label)
 
-# A_eff: points connected by lines + Gaussian error bars
 errorline(ax_left, E_pts,      A_e_pts,   "Radio E")
 errorline(ax_left, E_pts,      A_mu_pts,  "Radio Mu")
 errorline(ax_left, E_pts,      A_tau_pts, "Radio Tau")
 errorline(ax_left, E_tr_GeV,   A_tr,      "Trinity Tau")
 errorline(ax_left, E_po_GeV,   A_po,      "Poemma Tau")
-errorline(ax_left, E_ic_GeV,   A_ic,      "IC Muon Track")
-errorline(ax_left,  E_tambo,   AOm_tambo_e,      "Tambo (e)")
-errorline(ax_left, E_tambo,          AOm_tambo_all, "TAMBO (τ)")   
-errorline(ax_left, IC_casc_E_center, IC_casc_AOm_mu,  "IC Casc (μ)")
-errorline(ax_left, IC_casc_E_center, IC_casc_AOm_e,   "IC Casc (e)")
-errorline(ax_left, IC_casc_E_center, IC_casc_AOm_tau, "IC Casc (τ)")
+errorline(ax_left,  E_tambo,   A_tambo_e,      "Tambo (e)")
+errorline(ax_left, E_tambo,          A_tambo_tau, "TAMBO (τ)")   
+errorline(ax_left, E_ic_mu, A_ic_mu,  "IC Casc+Track(μ)")
+errorline(ax_left, E_et, A_ic_cascade_e,   "IC Casc (e)")
+errorline(ax_left, E_et, A_ic_cascade_tau, "IC Casc (τ)")
+
 
 # Scales, labels, grids
 ax_left.set_xscale("log"); ax_left.set_yscale("log")

@@ -1,4 +1,4 @@
-
+## This script is not useful
 
 from __future__ import annotations
 import math
@@ -18,6 +18,14 @@ Omega_sr = 4.0 * math.pi  # upgoing hemisphere
 # Bin-edge multipliers per decade (5 equal log bins)
 MUL = np.array([1.0, 1.5849, 2.5119, 3.9811, 6.3096, 10.0], dtype=float)
 
+
+
+
+
+
+
+
+
 # Datasets (A and B). Keys are decades as integer powers of 10 for GeV.
 # Values are lists of bin counts; length can be < 5, in which case they map to the LAST bins.
 dataset_A: Dict[int, List[float]] = {
@@ -34,6 +42,30 @@ dataset_B: Dict[int, List[float]] = {
     5: [7.0, 4.0, 3.0, 1.8, 1.0],              # 10^5 GeV decade
     6: [0.7, 0.4, 0.36, 0.4],                  # 10^6 GeV decade (4 bins -> last 4)
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 # ------------- Core math -----------------
 def integral_powerlaw(Elo: float, Ehi: float, m: float, E0: float) -> float:
@@ -136,4 +168,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
