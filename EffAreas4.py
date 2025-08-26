@@ -1,4 +1,5 @@
 # Final EffAreas Plot divided explicitly by sensitivity
+# Just icecube with 2015  HESE data
 
 import os
 import math
@@ -39,15 +40,13 @@ def effective_area_from_sensitivity(E_pts, E2Phi_pts, *, E_units, T_years, mu90=
     edges[0]  = E_GeV[0]  / np.sqrt(E_GeV[1] / E_GeV[0])
     edges[-1] = E_GeV[-1] * np.sqrt(E_GeV[-1] / E_GeV[-2])
 
-    dlog10E = np.log10(edges[1:]) - np.log10(edges[:-1])
-    dE = E_GeV * np.log(10.0) * dlog10E
-
     Phi = E2Phi / (E_GeV)**2
-
     T_sec = T_years * SEC_PER_YEAR
 
+    dE = np.diff(edges) 
+
     # A_eff from the rearranged N=μ90 at sensitivity
-    Aeff_cm2 = mu90 / (T_sec * DeltaOmega * Phi * dE)
+    Aeff_cm2 = mu90 / (T_sec * DeltaOmega * Phi *  dE)
     Aeff_m2 = Aeff_cm2 / 1e4
     return E_GeV, Aeff_m2
 
@@ -75,7 +74,7 @@ E2Phi_et_max = np.array([1.7e-7, 4.0e-8, 1.5e-8])
 E2Phi_et_min = np.array([9.5e-8, 2e-8, 6e-9])
 
 # Analysis constants
-T_YEARS = 6
+T_YEARS = 10
 MU90 = 2.3
 OMEGA_SR = 4 * np.pi
 
@@ -145,7 +144,7 @@ def errorline(ax, x, y, label):
 
 # Add flavor components
 
-master = np.logspace(4.1,6.1, 200)
+master = np.logspace(4.1,7, 200)
 
 ice_cube_muon = (A_muon_min_interp+A_muon_max_interp)/2
 ice_cube_tau = (A_ic_cascade_emin+A_ic_cascade_emax)/2

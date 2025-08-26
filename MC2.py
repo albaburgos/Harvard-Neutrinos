@@ -1,44 +1,18 @@
 #!/usr/bin/env python3
-"""
-Monte Carlo Triangle — Grid + Chi^2 vs Baseline 
----------------------------------------------------------
 
-- Reads "effareasmc.csv" with columns:
-    1) master/E_GeV (bin centers, GeV)
-    2) A_muon
-    3) A_tau
-    4) A_electron
-- Uses user's physics configuration (see below).
-- Runs across all flavor compositions (fe,fmu,ftau) on a 0.2 grid summing to 1.
-- Computes counts per coarse log10(E) bin using the limiting-flavor construction.
-- Computes chi^2 for each composition against the baseline distribution of
-  (fe,fmu,ftau) = (1/3, 1/3, 1/3). By default we compare SHAPE-normalized
-  distributions (each histogram normalized to sum to 1), so the chi^2 is a
-  shape-only comparison.
-
-Outputs (in OUTDIR):
-- chi2_vs_baseline.csv : fe,fmu,ftau,chi2,ndof,shape_normalized
-- (Optional) per-composition plots/CSVs are disabled by default to speed up.
-
-Edit config below if needed.
-"""
-
-## For All-Experiment Analysis use  "effareasmc.csv"
-# For IceCube Analysis use
 
 import os
 import math
 from typing import List, Tuple
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
 # -------------------- Configuration (from user's script) --------------------
-CSV_PATH = "effareasmc.csv"
-BIN_WIDTH_LOG10 = 0.1
-PHI0 = 1.68*10e-18
-T_EXPOSURE = 10*365.25 * 24 * 3600.0
+CSV_PATH = "MC_outputs/effareasMESE.csv"
+BIN_WIDTH_LOG10 = 0.33
+PHI0 =  2.72e-18
+T_EXPOSURE = 11.4*365.25 * 24 * 3600.0
 OMEGA = 4*np.pi
 E0 = 1e5
 
@@ -91,17 +65,20 @@ def geometric_edges_from_centers(E: np.ndarray) -> np.ndarray:
 def make_log_bins(edges: np.ndarray, bin_width_log10: float) -> np.ndarray:
     lo = math.log10(edges[0])
     hi = math.log10(edges[-1])
-    start = bin_width_log10 * math.floor(lo / bin_width_log10)
-    stop  = bin_width_log10 * math.ceil(hi / bin_width_log10)
+
+    # start from the first edge's log10
+    start = lo
+    # extend in equal log10 steps until we cover the max edge (may exceed it)
+    stop = lo + math.ceil((hi - lo) / bin_width_log10) * bin_width_log10
+
+    # generate edges at fixed log10 spacing
     raw = 10.0 ** np.arange(start, stop + 1e-12, bin_width_log10)
-    raw[0] = max(raw[0], edges[0])
-    raw[-1] = min(raw[-1], edges[-1])
-    b = np.clip(raw, edges[0], edges[-1])
-    b = np.unique(b)
-    if b[0] > edges[0]:
-        b = np.insert(b, 0, edges[0])
-    if b[-1] < edges[-1]:
-        b = np.append(b, edges[-1])
+
+    # ensure the very first edge is exactly edges[0]
+    raw[0] = edges[0]
+
+    # return as-is (no clipping to edges[-1])
+    b = np.unique(raw)
     return b
 
 def integrate_bin_I(edges: np.ndarray, centers: np.ndarray, A: np.ndarray, Emin: float, Emax: float) -> float:
@@ -113,7 +90,7 @@ def integrate_bin_I(edges: np.ndarray, centers: np.ndarray, A: np.ndarray, Emin:
         L = max(a, Emin)
         U = min(b, Emax)
         if L < U:
-            total += A[j] * ((centers[j])**-2.6) * dE[j]
+            total += A[j] * ((centers[j])**-2.54) * dE[j]
     return float(total)
 
 
@@ -130,6 +107,58 @@ def events_per_coarse_bin(E: np.ndarray, edges: np.ndarray, A_e: np.ndarray, A_m
 
 
     return np.asarray(counts)
+
+def chi2_pearson(obs: np.ndarray, exp: np.ndarray, shape_normalize: bool = True) -> Tuple[float, int]:
+    """
+    Compute the Pearson chi-square statistic between observed (obs) and expected (exp).
+
+    Parameters
+    ----------
+    obs : np.ndarray
+        Observed counts or proportions (nonnegative).
+    exp : np.ndarray
+        Expected counts or proportions (must be > 0 wherever compared).
+    shape_normalize : bool, default True
+        If True, normalize obs and exp to sum to 1 (compares shapes only).
+        If False, use values as-is.
+
+    Returns
+    -------
+    chi2 : float
+        Pearson chi-square statistic (NaN if nothing to compare).
+    ndof : int
+        Degrees of freedom: (#bins - 1) if shape_normalize else #bins.
+        Clamped at >= 0.
+    """
+    o = np.asarray(obs, dtype=float).ravel()
+    e = np.asarray(exp, dtype=float).ravel()
+
+    if o.shape != e.shape:
+        raise ValueError(f"obs and exp must have the same shape, got {o.shape} vs {e.shape}")
+
+    # Keep only bins with strictly positive expected value
+    mask = e > 0
+    o = o[mask]
+    e = e[mask]
+
+    if o.size == 0:
+        return float("nan"), 0
+
+    if shape_normalize:
+        o_sum = o.sum()
+        e_sum = e.sum()
+        # If either sum is nonpositive, statistic is undefined
+        if o_sum <= 0 or e_sum <= 0:
+            return float("nan"), 0
+        o = o / o_sum
+        e = e / e_sum
+
+    # Pearson chi-square
+    chi2 = float(np.sum((o - e) ** 2 / e))
+
+    # Degrees of freedom
+    ndof = len(e) - 1 if shape_normalize else len(e)
+    return chi2, max(ndof, 0)
 
 
 def generate_flavor_grid(step: float = 0.2) -> List[Tuple[float, float, float]]:
@@ -176,34 +205,6 @@ def save_counts_csv(coarse_edges: np.ndarray, counts: np.ndarray, path: str):
     df.to_csv(path, index=False)
 
 
-def chi2_pearson(obs: np.ndarray, exp: np.ndarray, shape_normalize: bool = True) -> Tuple[float, int]:
-    """
-    Compute Pearson chi^2 between obs and exp.
-    """
-
-    o = np.asarray(obs, dtype=float)
-    e = np.asarray(exp, dtype=float)
-
-    mask = e > 0
-    o = o[mask]
-    e = e[mask]
-
-    if o.size == 0:
-        return float("nan"), 0
-
-    if shape_normalize:
-        o_sum = o.sum()
-        e_sum = e.sum()
-        if o_sum > 0:
-            o = o / o_sum
-        if e_sum > 0:
-            e = e / e_sum
-
-    # Avoid division by zero; mask ensures e>0
-    chi2 = float(np.sum((o - e) ** 2 / e))
-    ndof = len(e) - (1 if shape_normalize else 0)
-    return chi2, max(ndof, 0)
-
 
 def main():
     os.makedirs(OUTDIR, exist_ok=True)
@@ -212,7 +213,7 @@ def main():
     E, A_mu, A_tau, A_e = read_effarea_csv(CSV_PATH)
     edges = geometric_edges_from_centers(E)
     coarse_edges = make_log_bins(edges, BIN_WIDTH_LOG10)
-    norm = PHI0 * T_EXPOSURE * OMEGA * (E0**2)
+    norm = PHI0 * T_EXPOSURE * OMEGA 
 
     # Baseline distribution (1/3,1/3,1/3)
     fe0 = fmu0 = ftau0 = 1.0/3.0
@@ -236,15 +237,8 @@ def main():
             E, edges, A_e, A_mu, A_tau, coarse_edges, fe, fmu, ftau, norm
         )
 
-        chi2, ndof = chi2_pearson(counts, base_counts, shape_normalize=SHAPE_NORMALIZE)
+        chi2, ndof = chi2_pearson(counts, base_counts, shape_normalize = True)
 
-        # optional artifacts (usually off for speed)
-        if WRITE_PER_COMPOSITION_CSV:
-            csv_name = f"events_fe{fe:.1f}_fmu{fmu:.1f}_ftau{ftau:.1f}.csv"
-            save_counts_csv(coarse_edges, counts, os.path.join(OUTDIR, csv_name))
-        if WRITE_PER_COMPOSITION_PNG:
-            png_name = f"events_fe{fe:.1f}_fmu{fmu:.1f}_ftau{ftau:.1f}.png"
-            plot_histogram(coarse_edges, counts, fe, fmu, ftau, os.path.join(OUTDIR, png_name))
 
         rows.append({
             "fe": fe,

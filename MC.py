@@ -19,12 +19,12 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # -------------------- Constants (match your setup) --------------------
-POSSIBLE_CSVS = [ "effareasicecube.csv"]
-BIN_WIDTH_LOG10 = 0.1
-PHI0 = 1.68e-18
-T_EXPOSURE = 10*365.25 * 24 * 3600.0
+POSSIBLE_CSVS = [ "MC_outputs/effareasMESE.csv"]
+BIN_WIDTH_LOG10 = 0.5
+PHI0 = 2.78e-18*3
+T_EXPOSURE = 11.4*365.25 * 24 * 3600.0
 OMEGA = 4*np.pi
-E0 = 10**5
+E0 = 1e5
 
 FLAVORS = [
     (1/3, 1/3, 1/3),
@@ -69,7 +69,7 @@ def read_effarea():
             print(f"[info] Loaded '{path}' (with header).")
             return E[order], A_e[order], A_mu[order], A_tau[order]
     raise FileNotFoundError(
-        "Could not find 'effareasmc.csv' or 'effareasicecube.csv' in the working directory."
+        "err"
     )
 
 def geometric_edges_from_centers(E: np.ndarray) -> np.ndarray:
@@ -87,21 +87,25 @@ def geometric_edges_from_centers(E: np.ndarray) -> np.ndarray:
 def make_log_bins(edges: np.ndarray, bin_width_log10: float) -> np.ndarray:
     lo = math.log10(edges[0])
     hi = math.log10(edges[-1])
-    start = bin_width_log10 * math.floor(lo / bin_width_log10)
-    stop  = bin_width_log10 * math.ceil(hi / bin_width_log10)
+
+    # start from the first edge's log10
+    start = lo
+    # extend in equal log10 steps until we cover the max edge (may exceed it)
+    stop = lo + math.ceil((hi - lo) / bin_width_log10) * bin_width_log10
+
+    # generate edges at fixed log10 spacing
     raw = 10.0 ** np.arange(start, stop + 1e-12, bin_width_log10)
-    raw[0] = max(raw[0], edges[0])
-    raw[-1] = min(raw[-1], edges[-1])
-    b = np.clip(raw, edges[0], edges[-1])
-    b = np.unique(b)
-    if b[0] > edges[0]:
-        b = np.insert(b, 0, edges[0])
-    if b[-1] < edges[-1]:
-        b = np.append(b, edges[-1])
+
+    # ensure the very first edge is exactly edges[0]
+    raw[0] = edges[0]
+
+    # return as-is (no clipping to edges[-1])
+    b = np.unique(raw)
     return b
 
 def integrate_bin_I(edges: np.ndarray, centers: np.ndarray, A: np.ndarray, Emin: float, Emax: float) -> float:
     total = 0.0
+    print (centers)
     dE = np.diff(edges)
     for j in range(len(centers)):
         a = edges[j]
@@ -109,7 +113,7 @@ def integrate_bin_I(edges: np.ndarray, centers: np.ndarray, A: np.ndarray, Emin:
         L = max(a, Emin)
         U = min(b, Emax)
         if L < U:
-            total += A[j] * ((centers[j])**-3) * dE[j]
+            total += A[j] * ((centers[j]/E0)**-2.6) * dE[j] 
     return float(total)
 
 
@@ -132,7 +136,7 @@ def main():
     E, A_e, A_mu, A_tau = read_effarea()
     edges = geometric_edges_from_centers(E)
     coarse_edges = make_log_bins(edges, BIN_WIDTH_LOG10)
-    norm = PHI0 * T_EXPOSURE * OMEGA * E0**2
+    norm = PHI0 * T_EXPOSURE * OMEGA 
 
     # Compute counts for all four mixes
     counts_list = []
@@ -143,16 +147,31 @@ def main():
     # ---- One 2x2 figure ----
     fig, axes = plt.subplots(2, 2, figsize=(12, 9))
     axes = axes.ravel()
+
     lefts = coarse_edges[:-1]
     rights = coarse_edges[1:]
     widths = rights - lefts
+    centers = np.sqrt(lefts * rights)  # geometric centers for log bins
+
     for ax, counts, title in zip(axes, counts_list, TITLES):
-        ax.bar(lefts, counts, width=widths, align="edge", edgecolor="black", linewidth=0.7)
+        y = np.asarray(counts, dtype=float)
+        yerr = np.sqrt(np.maximum(y, 0.0))  # error scales as sqrt(value)
+
+        ax.errorbar(
+            centers, y, yerr=yerr,
+            fmt="o", markersize=4, linewidth=1.0,
+            capsize=2, elinewidth=0.9
+        )
+        # If you also want to visualize bin widths horizontally, uncomment:
+        # ax.errorbar(centers, y, xerr=widths/2, yerr=yerr, fmt="o", capsize=2, elinewidth=0.9)
+
         ax.set_xscale("log")
         ax.set_xlabel("Energy (GeV)")
         ax.set_ylabel("Events/bin (10 yr)")
         ax.set_title(title)
         ax.grid(True, which="both", axis="both", alpha=0.3)
+        ax.set_xlim(lefts[0], rights[-1])
+        ax.set_ylim(bottom=0)
 
     fig.suptitle("Monte Carlo Triangle Analysis — Four Flavor Configurations", y=0.98)
     fig.tight_layout(rect=[0, 0.00, 1, 0.97])

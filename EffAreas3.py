@@ -1,4 +1,5 @@
 # Final EffAreas Plot divided explicitly by sensitivity
+# All experiment
 
 import os
 import math
@@ -20,6 +21,37 @@ class FluxModel:
         return self.phi0_per_flavor * (E / self.E0) ** (-self.gamma)
 
 
+def effective_area_from_sensitivity2(E_pts, E2Phi_pts, *, E_units, T_years, mu90=2.3, DeltaOmega):
+    E = np.asarray(E_pts, dtype=float)
+    E2Phi = np.asarray(E2Phi_pts, dtype=float)
+
+    if str(E_units).lower() == "ev":
+        E_GeV = E / 1e9
+    else:
+        E_GeV = E.copy()
+
+    order = np.argsort(E_GeV)
+    E_GeV = E_GeV[order]
+    E2Phi = E2Phi[order]
+
+    # Geometric bin edges from centers
+    edges = np.zeros(len(E_GeV) + 1)
+    for i in range(1, len(E_GeV)):
+        edges[i] = np.sqrt(E_GeV[i-1] * E_GeV[i])
+    edges[0]  = E_GeV[0]  / np.sqrt(E_GeV[1] / E_GeV[0])
+    edges[-1] = E_GeV[-1] * np.sqrt(E_GeV[-1] / E_GeV[-2])
+
+    Phi = E2Phi / (E_GeV)**2
+    T_sec = T_years * SEC_PER_YEAR
+
+    dE = np.diff(edges) 
+
+    # A_eff from the rearranged N=μ90 at sensitivity
+    Aeff_cm2 = mu90 / (T_sec * DeltaOmega * Phi *  dE)
+    Aeff_m2 = Aeff_cm2 / 1e4
+
+    return E_GeV, Aeff_m2
+
 def effective_area_from_sensitivity(E_pts, E2Phi_pts, *, E_units, T_years, mu90=2.3, DeltaOmega):
     E = np.asarray(E_pts, dtype=float)
     E2Phi = np.asarray(E2Phi_pts, dtype=float)
@@ -40,17 +72,16 @@ def effective_area_from_sensitivity(E_pts, E2Phi_pts, *, E_units, T_years, mu90=
     edges[0]  = E_GeV[0]  / np.sqrt(E_GeV[1] / E_GeV[0])
     edges[-1] = E_GeV[-1] * np.sqrt(E_GeV[-1] / E_GeV[-2])
 
-    dlog10E = np.log10(edges[1:]) - np.log10(edges[:-1])
-    dE = E_GeV * np.log(10.0) * dlog10E
-
     Phi = E2Phi / (E_GeV)**2
-
     T_sec = T_years * SEC_PER_YEAR
 
+    dE = np.diff(edges)
+
     # A_eff from the rearranged N=μ90 at sensitivity
-    Aeff_cm2 = mu90 / (T_sec * DeltaOmega * Phi * dE)
+    Aeff_cm2 = mu90 / (T_sec * DeltaOmega * Phi *  np.diff(edges))
     Aeff_m2 = Aeff_cm2 / 1e4
     return E_GeV, Aeff_m2
+
 
 def log_interp(x, xp, fp):
     """Log-log linear interpolation. Returns 0 outside the positive range."""
