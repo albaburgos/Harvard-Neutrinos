@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 T_years = 11.3
 DeltaOmega = 4*np.pi 
 
-OUTPUT_CSV = "MC_outputs/effareasMESETambo2.csv"
+OUTPUT_CSV = "MC_outputs/effareasMESE.csv"
 PLOT_PNG   = "combined_plot.png"
 
 SEC_PER_YEAR = 365.25 * 24 * 3600.0
@@ -65,6 +65,7 @@ def effective_area_from_Nev(E_GeV, N_ev, T_years, DeltaOmega):
     order = np.argsort(E_GeV)
     E_GeV = E_GeV[order]
     N_ev  = N_ev[order]
+    print(E_GeV[0])
 
     # Geometric bin edges from centers
     edges = np.zeros(len(E_GeV) + 1)
@@ -117,14 +118,12 @@ def effective_area_from_sensitivity(E_pts, E2Phi_pts, *, E_units, T_years, mu90=
     edges[0]  = E_GeV[0]  / np.sqrt(E_GeV[1] / E_GeV[0])
     edges[-1] = E_GeV[-1] * np.sqrt(E_GeV[-1] / E_GeV[-2])
 
-    #Phi = E2Phi / (E_GeV)**2
-    #T_sec = T_years * SEC_PER_YEAR
-
+    Phi = E2Phi / (E_GeV)**2
     dE = np.diff(edges) 
+    T_sec = T_years * SEC_PER_YEAR
 
     # A_eff from the rearranged N=μ90 at sensitivity
     Aeff_cm2 = mu90 / (T_sec * DeltaOmega * Phi *  dE )
-    Aeff_m2 = Aeff_cm2 / 1e4
     return E_GeV, Aeff_cm2
 
 
@@ -153,22 +152,27 @@ AOm_tambo_tau = log_interp(E_tambo, tambo_E_GeV_base, tambo_tau_ap_m2sr_base)
 AOm_tambo_all = log_interp(E_tambo, tambo_E_GeV_base, tambo_all_ap_m2sr_base)       
 AOm_tambo_e   = np.abs(AOm_tambo_all - AOm_tambo_tau)            
 
-A_tambo_e = AOm_tambo_e  / tambo_angle * (10*3600*24)
-A_tambo_tau = AOm_tambo_tau  / tambo_angle* (10*3600*24)
+A_tambo_e = AOm_tambo_e *10e4 / (tambo_angle )
+A_tambo_tau = AOm_tambo_tau*10e4  / (tambo_angle)
 
+A_tambo_mu = A_tambo_e *0
 
 # ------------------------ Common energy grid ------------------------
-emin = min(min(E1), min(E2), min(E3), min(E_tambo))
-emax = max(max(E1), max(E2), max(E3), max(E_tambo))
+print(E1tau)
+emin = min(min(E2e), min(E1tau), min(E3mu))
+emax =  max(max(E1e), max(E2tau), max(E3mu))
+print (emax, emin)
+#emin = min(E_tambo)
+#emax =  max(E_tambo)
 master = np.logspace(np.log10(emin), np.log10(emax), 300)
 
-#A_tau_master = log_interp(master, E_casc, A_casc_tau) + log_interp(master, E_db,  A_db) + log_interp(master, E_tambo,  A_tambo_tau)
-#A_mu_master  = log_interp(master, E_casc, A_casc_mu)  + log_interp(master, E_trk, A_trk)
-#A_e_master   = log_interp(master, E_casc, A_casc_e)+ log_interp(master, E_tambo,  A_tambo_e)
+#A_tau_master =  log_interp(master, E_tambo,  A_tambo_tau)*0.1
+#A_mu_master  = log_interp(master, E_tambo,  A_tambo_mu)*0.1
+#A_e_master   =  log_interp(master, E_tambo,  A_tambo_e)*0.1
 
-A_mu_master = log_interp(master, E1mu, A1mu) + log_interp(master, E2mu,  A2mu) + log_interp(master, E3mu,  A3mu) 
-A_tau_master = log_interp(master, E1tau, A1tau) + log_interp(master, E2tau,  A2tau) + log_interp(master, E3tau,  A3tau)+ log_interp(master, E_tambo,  A_tambo_tau)
-A_e_master = log_interp(master, E1e, A1e) + log_interp(master, E2e,  A2e) + log_interp(master, E3e,  A3e) + log_interp(master, E_tambo,  A_tambo_e)
+A_mu_master = (log_interp(master, E1mu, A1mu) + log_interp(master, E2mu,  A2mu) + log_interp(master, E3mu,  A3mu))
+A_tau_master = (log_interp(master, E1tau, A1tau) + log_interp(master, E2tau,  A2tau) + log_interp(master, E3tau,  A3tau)) 
+A_e_master = (log_interp(master, E1e, A1e) + log_interp(master, E2e,  A2e) + log_interp(master, E3e,  A3e))
 
 # ------------------------ Plot ------------------------
 plt.figure(figsize=(9,6), dpi=140)
@@ -176,8 +180,8 @@ plt.loglog(master, A_mu_master,  label="Muon")
 plt.loglog(master, A_tau_master, label="Tau")
 plt.loglog(master, A_e_master,   label="Electron")
 plt.xlabel("Energy E (GeV)")
-plt.ylabel(r"Effective Area $A_{\rm eff}$ (m$^2$)")
-plt.title("Effective Area per-flavor MESE (11.3yr) + TAMBO (10yr) ")
+plt.ylabel(r"Effective Area $A_{\rm eff}$ (cm$^2$)")
+plt.title("Effective Area per-flavor MESE (21.3yr) ")
 plt.grid(True, which="both", alpha=0.3)
 plt.legend(loc="lower right", fontsize=9, ncol=2)
 plt.tight_layout()

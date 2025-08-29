@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 CSV_PATH = "MC_outputs/effareasMESE.csv"
 BIN_WIDTH_LOG10 = 0.2
 PHI0 = 2.72e-18
-T_EXPOSURE = 11.3*365.25 * 24 * 3600.0
+T_EXPOSURE = 10*365.25 * 24 * 3600.0
 OMEGA = 4*np.pi
 E0 = 1e5
 GRID_STEP = 1/60      
@@ -123,7 +123,7 @@ def make_log_bins(edges: np.ndarray, bin_width_log10: float) -> np.ndarray:
     # start from the first edge's log10
     start = lo
     # extend in equal log10 steps until we cover the max edge (may exceed it)
-    stop = lo + math.ceil((hi - lo) / bin_width_log10) * bin_width_log10
+    stop = lo + math.ceil((hi - lo))
 
     # generate edges at fixed log10 spacing
     raw = 10.0 ** np.arange(start, stop + 1e-12, bin_width_log10)
@@ -200,7 +200,6 @@ def plot_2x2_histograms(coarse_edges: np.ndarray,
                          labels: List[str],
                          out_png: str):
     """Make a 2x2 grid of energy histograms sharing axes.
-
     counts_list must contain exactly 4 arrays corresponding to labels.
     """
     assert len(counts_list) == 4 and len(labels) == 4, "Need 4 cases for a 2x2 grid"
@@ -253,7 +252,6 @@ def log_likelihood_ratio(observed, expected):
 
     Lg = np.sum(term1 + term2 - term3)
     return Lg
- 
 
 from scipy.special import gammaln
 
@@ -327,7 +325,14 @@ def main():
     counts_001 = events_per_coarse_bin(E, edges, A_e, A_mu, A_tau, coarse_edges, 0.0, 0.0, 1.0, norm)
     counts_010 = events_per_coarse_bin(E, edges, A_e, A_mu, A_tau, coarse_edges, 0.0, 1.0, 0.0, norm)
     counts_100 = events_per_coarse_bin(E, edges, A_e, A_mu, A_tau, coarse_edges, 1.0, 0.0, 0.0, norm)
+    
+    counts_listplot = [counts_001, counts_010, counts_100, base_counts]
+    labels_plot = ["001", "010", "100", "base"]
 
+    plot_2x2_histograms(coarse_edges,
+                            counts_listplot,
+                            labels_plot,
+                            "2x2hist.png")
 
     flavors = generate_flavor_grid(step=GRID_STEP)
     fe_arr = np.array([g[0] for g in flavors], dtype=float)
@@ -461,7 +466,7 @@ def main():
 
     ax.set_aspect("equal", adjustable="box")
     ax.axis("off")
-    ax.set_title('\nFlavor Likelihood Analysis with MESE (11.3 yr)'
+    ax.set_title('\nFlavor Likelihood Analysis All-Experiment(10yr)'
                  '\n assuming SPL Astrophysical Flux (MESE Best-Fit γ = -2.54)')
 
     os.makedirs("MC_outputs", exist_ok=True)
