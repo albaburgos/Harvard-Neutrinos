@@ -200,8 +200,21 @@ E_poemma, A_poemma = effective_area_from_sensitivity(
 E_poemma_interp = np.logspace(np.log10(E_poemma[0]), np.log10(E_poemma[-1]), 100)
 A_poemma_interp = log_interp(E_poemma_interp, E_poemma, A_poemma)
 
+
+### IceCube Gen2 (Visual)
+E_gen2vis   = np.array([1e15,3e15,9e15, 1e16,2e16, 3e16, 1e17])
+E2Phi_gen2vis = np.array([3e-10,3.5e-10, 4e-10, 5e-10, 7e-10, 1e-9, 1e-9])
+T_gen2, mu90_gen2, Omega_gen2 = 10, 2.3, 4*np.pi
+
+E_gen2vis, A_gen2vis = effective_area_from_sensitivity(
+    E_gen2vis, E2Phi_gen2vis, E_units="eV", T_years=T_gen2, mu90=mu90_gen2, DeltaOmega=Omega_gen2
+)
+
+E_gen2vis_interp = np.logspace(np.log10(E_gen2vis[0]), np.log10(E_gen2vis[-1]), 100)
+A_gen2vis_interp = log_interp(E_gen2vis_interp, E_gen2vis, A_gen2vis)
+
 ### IceCube Gen2 Radio
-E_gen2   = np.array([1e15,3e16,1e17,1e18,1e19,2.5e19])
+E_gen2   = np.array([1e17,1e18,1e19,2.5e19])
 E2Phi_gen2 = np.array([3e-10,5e-10, 1e-9,9e-10,4.5e-10,6e-10,9e-10])
 T_gen2, mu90_gen2, Omega_gen2 = 10, 2.3, 4*np.pi
 
@@ -259,10 +272,6 @@ A_rnogo_on  = _log_interp_1d(E_grid_radio, Ex_rno,   Ay_rno)
 A_gen2_on   = _log_interp_1d(E_grid_radio, Ex_gen2,  Ay_gen2)
 A_grand_on  = _log_interp_1d(E_grid_radio, Ex_grand, Ay_grand)
 
-# 3) Read radioscaling.csv (Energy (GeV), electron fraction, muon fraction, taon/tau fraction)
-if not os.path.exists("radioscaling.csv"):
-    raise FileNotFoundError("Missing 'radioscaling.csv' in the working directory.")
-
 df = pd.read_csv("radioscaling.csv")
 cols = {c.lower(): c for c in df.columns}
 
@@ -309,14 +318,92 @@ A_e_radio   = sum_radio * frac_e
 A_mu_radio  = sum_radio * frac_mu
 A_tau_radio = sum_radio * frac_tau + A_grand_on
 
+
+# Ice Cube gen 2 interpolation 
+
+eminIC = min(min(E1), min(E2), min(E3))
+emaxIC = max(max(E1), max(E2), max(E3))
+masterIC = np.logspace(np.log10(eminIC), np.log10(emaxIC), 300)
+IC_mu  = (log_interp(masterIC, E2mu,  A2mu)
+        + log_interp(masterIC, E2mu,  A2mu)
+        + log_interp(masterIC, E2mu,  A2mu))
+
+IC_e   = (log_interp(masterIC, E2e,   A2e)
+        + log_interp(masterIC, E2e,   A2e)
+        + log_interp(masterIC, E2e,   A2e))
+
+IC_tau = (log_interp(masterIC, E2tau, A2tau)
+        + log_interp(masterIC, E2tau, A2tau)
+        + log_interp(masterIC, E2tau, A2tau))
+
+IC_sum = IC_mu + IC_e + IC_tau
+eps = 0.0
+den = np.where(IC_sum > eps, IC_sum, 1.0)
+f_mu  = IC_mu  / den
+f_e   = IC_e   / den
+f_tau = IC_tau / den
+
+E_gen2vis_interp = np.logspace(np.log10(E_gen2vis[0]), np.log10(E_gen2vis[-1]), 100)
+A_gen2vis_interp = log_interp(E_gen2vis_interp, E_gen2vis, A_gen2vis)
+
+# Helper: interpolate in log10(E) *linearly in value* (safer for fractions)
+def interp_in_logE(y_src, E_src, E_dst):
+    logE_src = np.log10(E_src)
+    logE_dst = np.log10(E_dst)
+    # Use edge values for extrapolation; assumes E_src is sorted ascending
+    return np.interp(logE_dst, logE_src, y_src, left=y_src[0], right=y_src[-1])
+
+# 5) Bring fractions onto the Gen2 grid
+f_mu_at_gen2  = interp_in_logE(f_mu,  masterIC, E_gen2vis_interp)
+f_e_at_gen2   = interp_in_logE(f_e,   masterIC, E_gen2vis_interp)
+f_tau_at_gen2 = interp_in_logE(f_tau, masterIC, E_gen2vis_interp)
+
+# 6) Flavor-split Gen2 effective area
+ICgen2mu  = f_mu_at_gen2  * A_gen2vis_interp
+ICgen2e   = f_e_at_gen2   * A_gen2vis_interp
+ICgen2tau = f_tau_at_gen2 * A_gen2vis_interp
+
+def _plot_pos_loglog(x, y, label):
+    x = np.asarray(x)
+    y = np.asarray(y)
+    m = (x > 0) & (y > 0)
+    plt.loglog(x[m], y[m], lw=2, label=label)
+
+plt.figure(figsize=(7,4.5))
+_plot_pos_loglog(E_gen2vis_interp, ICgen2mu,  r"$\nu_\mu$")
+_plot_pos_loglog(E_gen2vis_interp, ICgen2e,   r"$\nu_e$")
+_plot_pos_loglog(E_gen2vis_interp, ICgen2tau, r"$\nu_\tau$")
+
+plt.xlabel("Energy (GeV)")
+plt.ylabel(r"Effective area [m$^2$]")
+plt.title("IceCube Gen2 — Flavor-split effective area")
+plt.grid(True, which="both", ls=":", alpha=0.4)
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+plt.figure(figsize=(7,4.5))
+_plot_pos_loglog(masterIC, IC_mu,  r"$\nu_\mu$")
+_plot_pos_loglog(masterIC, IC_e,   r"$\nu_e$")
+_plot_pos_loglog(masterIC, IC_tau, r"$\nu_\tau$")
+
+plt.xlabel("Energy (GeV)")
+plt.ylabel(r"Effective area [m$^2$]")
+plt.title("IceCube — Flavor-split effective area")
+plt.grid(True, which="both", ls=":", alpha=0.4)
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+
 # ------------------------ Common energy grid ------------------------
 emin = min(min(E1), min(E2), min(E3), min(E_tambo))
 emax = max(max(E1), max(E2), max(E3), max(E_tambo), max(E_grid_radio))
 master = np.logspace(np.log10(emin), np.log10(emax), 300)
 
-A_mu_master = log_interp(master, E1mu, A1mu) + log_interp(master, E2mu,  A2mu) + log_interp(master, E3mu,  A3mu) + log_interp(master, E_grid_radio,  A_mu_radio)  
-A_tau_master = (log_interp(master, E1tau, A1tau) + log_interp(master, E2tau,  A2tau) + log_interp(master, E3tau,  A3tau)) + log_interp(master, E_grid_radio,  A_tau_radio) + log_interp(master, E_trinity_interp, A_trinity_interp) + log_interp(master, E_poemma_interp, A_poemma_interp) + 0.1*log_interp(master, E_tambo,  A_tambo_tau)  
-A_e_master = log_interp(master, E1e, A1e) + log_interp(master, E2e,  A2e) + log_interp(master, E3e,  A3e) + log_interp(master, E_grid_radio,  A_e_radio)+0.1*log_interp(master, E_tambo,  A_tambo_e)  
+A_mu_master = (log_interp(master, E1mu, A1mu) + log_interp(master, E2mu,  A2mu) + log_interp(master, E3mu,  A3mu))*2 + log_interp(master, E_grid_radio,  A_mu_radio)  +  log_interp(master, E_gen2vis_interp,  ICgen2mu)
+A_tau_master = (log_interp(master, E1tau, A1tau) + log_interp(master, E2tau,  A2tau) + log_interp(master, E3tau,  A3tau))*2 + log_interp(master, E_grid_radio,  A_tau_radio) + log_interp(master, E_trinity_interp, A_trinity_interp) + log_interp(master, E_poemma_interp, A_poemma_interp) + 0.1*log_interp(master, E_tambo,  A_tambo_tau) + log_interp(master, E_gen2vis_interp,  ICgen2mu) 
+A_e_master = (log_interp(master, E1e, A1e) + log_interp(master, E2e,  A2e) + log_interp(master, E3e,  A3e) )*2 + log_interp(master, E_grid_radio,  A_e_radio)+0.1*log_interp(master, E_tambo,  A_tambo_e)  + log_interp(master, E_gen2vis_interp,  ICgen2mu)
 
 # ------------------------ Plot ------------------------
 plt.figure(figsize=(9,6), dpi=140)

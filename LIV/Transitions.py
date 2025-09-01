@@ -1,3 +1,5 @@
+
+
 import os
 import math
 from typing import List, Tuple
@@ -13,13 +15,13 @@ import matplotlib.pyplot as plt
 
 
 # -------------------- Configuration (from user's script) --------------------
-CSV_PATH = "MC_outputs/effareasMESE.csv"
+CSV_PATH = "MC_outputs/effareasAll.csv"
 BIN_WIDTH_LOG10 = 0.2
-PHI0 = 2.72e-18
-T_EXPOSURE = 11.3*365.25 * 24 * 3600.0
+PHI0 = 1.8e-18
+T_EXPOSURE = 10*365.25 * 24 * 3600.0
 OMEGA = 4*np.pi
-E0 = 1e5
-GRID_STEP = 1/60      
+E0 = 1e6
+GRID_STEP = 1/60
 SHAPE_NORMALIZE = True
 OUTDIR = "MC_outputs"
 
@@ -136,7 +138,7 @@ def make_log_bins(edges: np.ndarray, bin_width_log10: float) -> np.ndarray:
     b = np.unique(raw)
     return b
 
-def integrate_bin_I(edges: np.ndarray, centers: np.ndarray, A: np.ndarray, Emin: float, Emax: float) -> float:
+def integrate_bin_I(edges: np.ndarray, centers: np.ndarray, A: np.ndarray, Emin: float, Emax: float , gamma):
     total = 0.0
     dE = np.diff(edges)
     for j in range(len(centers)):
@@ -145,20 +147,20 @@ def integrate_bin_I(edges: np.ndarray, centers: np.ndarray, A: np.ndarray, Emin:
         L = max(a, Emin)
         U = min(b, Emax)
         if L < U:
-            total += A[j] * ((centers[j]/E0)**-2.54) * (U-L) * T_EXPOSURE * OMEGA * PHI0 
+            total += A[j] * ((centers[j]/E0)**-(gamma)) * (U-L) * T_EXPOSURE * OMEGA * PHI0 
     return float(total)
 
 
 def events_per_coarse_bin(E: np.ndarray, edges: np.ndarray, A_e: np.ndarray, A_mu: np.ndarray, A_tau: np.ndarray,
-                          coarse_edges: np.ndarray, fe: float, fmu: float, ftau: float, norm: float):
+                          coarse_edges: np.ndarray, fe: float, fmu: float, ftau: float, norm: float,  fe0: float, fmu0: float, ftau0: float,gamma):
     counts = []
     for i in range(len(coarse_edges) - 1):
         Emin = float(coarse_edges[i])
         Emax = float(coarse_edges[i + 1])
-        Ie   = integrate_bin_I(edges, E, A_e,  Emin, Emax)
-        Imu  = integrate_bin_I(edges, E, A_mu, Emin, Emax)
-        Itau = integrate_bin_I(edges, E, A_tau, Emin, Emax)
-        counts.append((Ie*fe+Imu*fmu+Itau*ftau)/(1/3))
+        Ie   = integrate_bin_I(edges, E, A_e,  Emin, Emax, gamma)
+        Imu  = integrate_bin_I(edges, E, A_mu, Emin, Emax, gamma)
+        Itau = integrate_bin_I(edges, E, A_tau, Emin, Emax, gamma)
+        counts.append((Ie*fe/fe0+Imu*fmu/fmu0+Itau*ftau/ftau0))
 
     return np.asarray(counts)
 
@@ -240,6 +242,20 @@ def save_counts_csv(coarse_edges: np.ndarray, counts: np.ndarray, path: str):
     })
     df.to_csv(path, index=False)
 
+def log_likelihood_ratio(observed, expected):
+
+    observed = np.asarray(observed, dtype=float)
+    expected = np.asarray(expected, dtype=float)
+    sigma_null = np.sqrt(expected)
+    sigma_alt = np.asarray(observed)
+
+    term1 = np.log(sigma_null / sigma_alt)
+    term2 = (expected**2) / (2 * sigma_null**2)
+    term3 = ((observed-expected)**2) / (2 * sigma_alt**2)
+
+    Lg = np.sum(term1 + term2 - term3)
+    return Lg
+
 from scipy.special import gammaln
 
 def poisson_loglike(k, lam):
@@ -247,6 +263,51 @@ def poisson_loglike(k, lam):
     lam = np.clip(lam, 1e-12, None)
     k = np.asarray(k, dtype=float)
     return np.sum(k * np.log(lam) - lam - gammaln(k + 1.0))
+
+class LikelihoodFunction:
+    
+    def __init__(self,data,event_classes,binning):
+        '''Sets up a likelihood function for some data and event classes
+        
+           data is a 1D array of quantities describing each data event
+           event_classes is a list of 1D arrays with quantites for each event 
+               class. These should be derived from simulation, and will be 
+               used to generate PDFs for each event class.
+           binning is a 1D array of bin edges describing how the data and PDFs 
+               should be binned for this analysis.
+        '''
+        # First step is to bin the data into a histogram (k_i)
+        self.data_counts = np.histogram(data,bins=binning)[0]
+        # Create a list to store PDFs for each event class
+        self.class_pdfs = []
+        for event_class in event_classes:
+            # Bin the MC data from each event class the same way as data
+            pdf_counts = np.histogram(event_class,bins=binning)[0]
+            # Normalized PDF (H_ij) such that sum of all bins is 1
+            pdf_norm = pdf_counts/np.sum(pdf_counts)
+            # Save for later
+            self.class_pdfs.append(pdf_norm)
+        
+    def __call__(self,*params):
+        '''Evaluates the likelihood function and returns likelihood
+        
+           params is a list of scale factors for each PDF (event_class) passed
+               to the __init__ method.
+        '''
+        # Observed event histogram is always the binned data
+        observed = self.data_counts
+        # Expected events are normalized PDFs times scale factors (\mu_j) for each PDF
+        expecteds = [scale*pdf for scale,pdf in zip(params,self.class_pdfs)]
+        # Sum up all the expected event historgrams bin-by-bin (sum over j is axis 0)
+        expected = np.sum(expecteds,axis=0)
+        # Calculate the bin-by-bin poisson probabilities to observe `observed` events
+        # with an average `expected` events in each bin (these poisson functions operate bin-by-bin)
+        bin_probabilities = poisson.pmf(observed,expected)
+        # multiply all the probabilities together
+        return np.prod(bin_probabilities)
+
+
+
 
 def main():
     os.makedirs(OUTDIR, exist_ok=True)
@@ -257,16 +318,23 @@ def main():
     coarse_edges = make_log_bins(edges, BIN_WIDTH_LOG10)
     norm = 2
 
-    # Baseline distribution (1/3,1/3,1/3)
-    fe0 = fmu0 = ftau0 = 1.0/3.0
+    mask = E<1e6
+    E, A_mu, A_tau, A_e = (E[mask], A_mu[mask], A_tau[mask], A_e[mask])
+
+    # Baseline distribution 0.30 - 0.36 - 0.34 vs. 0.17 0.45 0.37
+    fe0 = 0.30
+    fmu0 = 0.36
+    ftau0 = 0.34
+    gamma = 2
     base_counts = events_per_coarse_bin(
-        E, edges, A_e, A_mu, A_tau, coarse_edges, fe0, fmu0, ftau0, norm
+        E, edges, A_e, A_mu, A_tau, coarse_edges, fe0, fmu0, ftau0, norm, fe0, fmu0, ftau0, gamma
     )
 
+
     # Additional single-flavor extremes for 2x2 grid: 001, 010, 100, and 1/3-1/3-1/3
-    counts_001 = events_per_coarse_bin(E, edges, A_e, A_mu, A_tau, coarse_edges, 0.0, 0.0, 1.0, norm)
-    counts_010 = events_per_coarse_bin(E, edges, A_e, A_mu, A_tau, coarse_edges, 0.0, 1.0, 0.0, norm)
-    counts_100 = events_per_coarse_bin(E, edges, A_e, A_mu, A_tau, coarse_edges, 1.0, 0.0, 0.0, norm)
+    counts_001 = events_per_coarse_bin(E, edges, A_e, A_mu, A_tau, coarse_edges, 0.0, 0.0, 1.0, norm, fe0, fmu0, ftau0, gamma)
+    counts_010 = events_per_coarse_bin(E, edges, A_e, A_mu, A_tau, coarse_edges, 0.0, 1.0, 0.0, norm, fe0, fmu0, ftau0, gamma)
+    counts_100 = events_per_coarse_bin(E, edges, A_e, A_mu, A_tau, coarse_edges, 1.0, 0.0, 0.0, norm, fe0, fmu0, ftau0, gamma)
     
     counts_listplot = [counts_001, counts_010, counts_100, base_counts]
     labels_plot = ["001", "010", "100", "base"]
@@ -281,17 +349,20 @@ def main():
     fmu_arr = np.array([g[1] for g in flavors], dtype=float)
     ftau_arr = np.array([g[2] for g in flavors], dtype=float)
 
+
     counts_list = []
     for i, (fe, fmu, ftau) in enumerate(flavors):
         counts = events_per_coarse_bin(
-            E, edges, A_e, A_mu, A_tau, coarse_edges, fe, fmu, ftau, norm
+            E, edges, A_e, A_mu, A_tau, coarse_edges, fe, fmu, ftau, norm, fe0, fmu0, ftau0, gamma
         )
+        
         counts = np.asarray(counts)   # ensure NumPy array
         counts_list.append(counts)    # add to Python list
-        print(np.shape(counts_list))
-        print(np.shape(coarse_edges))
+    
+
 
     ll_grid = np.array([poisson_loglike(base_counts, lam) for lam in counts_list])
+
 
     best_idx = np.nanargmax(ll_grid)
     best_fe, best_fmu, best_ftau = flavors[best_idx]
@@ -408,8 +479,8 @@ def main():
 
     ax.set_aspect("equal", adjustable="box")
     ax.axis("off")
-    ax.set_title('\nFlavor Likelihood Analysis All-Experiment(10yr)'
-                 '\n assuming SPL Astrophysical Flux (MESE Best-Fit γ = -2.54)')
+    ax.set_title('\nFlavor Likelihood Analysis Low-Energies by 2040, Injected: Pion Decay'
+                 '\n assuming BPL Astrophysical Flux cut at 1000TeV')
 
     os.makedirs("MC_outputs", exist_ok=True)
     fig.tight_layout()
@@ -417,4 +488,10 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
 
