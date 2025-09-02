@@ -395,7 +395,8 @@ def main():
         F = np.asarray(flavors, dtype=float)
 
         # Scale flavor components once
-        F_scaled = F / np.array([fe0, fmu0, ftau0], dtype=float)  # shape (H, 3)
+        F_scaled = F
+        print (F_scaled)
 
         # Per-pixel vector [e_j, mu_j, tau_j]
         v_j = np.array([e_map[j], mu_map[j], tau_map[j]], dtype=float)  # shape (3,)
@@ -403,7 +404,6 @@ def main():
         # Counts for every hypothesis at pixel j (shape (H,))
         counts_angle_listj = F_scaled @ v_j
 
-        print(counts_angle_listj[x])
 
         # Vector of log-likelihoods at pixel j (one per hypothesis)
         ll_grid_pixelj = np.array([
@@ -413,14 +413,16 @@ def main():
 
         ll_by_j[j, :] = ll_grid_pixelj
 
-    #ll_grid = ll_grid_energy + ll_by_j.sum(axis=0)  # shape: (H,)
-    ll_grid = ll_by_j[5]  # shape: (H,)
+    ll_grid = ll_by_j[11] + ll_grid_energy +  ll_by_j[0]+  ll_by_j[5]
                 
 
     best_idx = np.nanargmax(ll_grid)
     best_fe, best_fmu, best_ftau = flavors[best_idx]
     print("Best (fe, fmu, ftau):", best_fe, best_fmu, best_ftau)
     print("Best log-likelihood:", ll_grid[best_idx])
+
+    np.savez("LIV/llgrid.npz", flavors=np.asarray(flavors, float),
+         ll_grid=np.asarray(ll_grid, float))
     
     # --- barycentric -> 2D triangle coordinates for plotting ---
     x, y = bary_to_xy(fe_arr, fmu_arr, ftau_arr)  # each length N
